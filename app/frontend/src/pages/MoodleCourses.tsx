@@ -3,13 +3,13 @@ import {
   Stack, Title, Text, Badge, Group, Button, Select,
   Paper, Loader, Alert, Table, ActionIcon,
   Tooltip, Modal, Textarea, ScrollArea, Divider,
-  ThemeIcon,
+  ThemeIcon, Checkbox, Progress, Box,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
   IconRefresh, IconCloud, IconCheck, IconX,
   IconSend, IconLock, IconLockOpen, IconDownload,
-  IconDatabaseImport, IconArchive,
+  IconDatabaseImport, IconArchive, IconSquareCheck,
 } from '@tabler/icons-react'
 import {
   api, type MoodleCourse, type MoodleSection,
@@ -161,24 +161,39 @@ function SectionPanel({ section, courseId, versions }: SectionPanelProps) {
   )
 }
 
+// ── Batch import status types ─────────────────────────────────────────────────
+
+type BatchStatus = 'pending' | 'running' | 'done' | 'error'
+
+interface BatchItem {
+  course: MoodleCourse
+  status: BatchStatus
+  error?: string
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MoodleCoursesPage() {
-  const [siteName, setSiteName]     = useState<string | null>(null)
-  const [courses, setCourses]       = useState<MoodleCourse[]>([])
-  const [selected, setSelected]     = useState<MoodleCourse | null>(null)
-  const [sections, setSections]     = useState<MoodleSection[]>([])
-  const [libVersions, setLibVersions] = useState<CourseVersion[]>([])
-  const [loading, setLoading]       = useState(false)
-  const [loadingSec, setLoadingSec] = useState(false)
+  const [siteName, setSiteName]         = useState<string | null>(null)
+  const [courses, setCourses]           = useState<MoodleCourse[]>([])
+  const [selected, setSelected]         = useState<MoodleCourse | null>(null)
+  const [sections, setSections]         = useState<MoodleSection[]>([])
+  const [libVersions, setLibVersions]   = useState<CourseVersion[]>([])
+  const [loading, setLoading]           = useState(false)
+  const [loadingSec, setLoadingSec]     = useState(false)
   const [importing, setImporting]       = useState(false)
   const [backupFiles, setBackupFiles]   = useState<MoodleBackupFile[] | null>(null)
   const [checkingBackup, setCheckingBackup] = useState(false)
-  const [addingBackup, setAddingBackup] = useState<string | null>(null) // filename in progress
+  const [addingBackup, setAddingBackup] = useState<string | null>(null)
+
+  // Multi-select state
+  const [checkedIds, setCheckedIds]     = useState<Set<number>>(new Set())
+  const [batchItems, setBatchItems]     = useState<BatchItem[]>([])
+  const [batching, setBatching]         = useState(false)
 
   const loadCourses = () => {
     setLoading(true)
-    // Load site name alongside course list
+    setCheckedIds(new Set())
     api.moodle.ping()
       .then(info => setSiteName(info.site_name))
       .catch(() => {})
@@ -232,7 +247,6 @@ export default function MoodleCoursesPage() {
         color: 'green',
         icon: <IconCheck />,
       })
-      // Refresh version badge
       const vers = await api.courses.versions(selected.shortname)
       setLibVersions(vers)
     } catch (e: any) {
@@ -285,7 +299,66 @@ export default function MoodleCoursesPage() {
     }
   }
 
-  // AppShell header=56, padding top=16, tabs≈42, tabs mb=16 → ~130px total offset
+  // ── Batch import ────────────────────────────────────────────────────────────
+
+  const toggleCheck = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setCheckedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    if (checkedIds.size === courses.length) {
+      setCheckedIds(new Set())
+    } else {
+      setCheckedIds(new Set(courses.map(c => c.id)))
+    }
+  }
+
+  const runBatchImport = async () => {
+    const selected_courses = courses.filter(c => checkedIds.has(c.id))
+    const items: BatchItem[] = selected_courses.map(c => ({ course: c, status: 'pending' }))
+    setBatchItems(items)
+    setBatching(true)
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      setBatchItems(prev => prev.map((it, idx) =>
+        idx === i ? { ...it, status: 'running' } : it
+      ))
+      try {
+        await api.moodle.importCourse(item.course.id, {
+          shortname:  item.course.shortname,
+          fullname:   item.course.fullname,
+          start_date: ts2date(item.course.startdate),
+          end_date:   ts2date(item.course.enddate),
+          instance:   siteName || 'Moodle',
+        })
+        setBatchItems(prev => prev.map((it, idx) =>
+          idx === i ? { ...it, status: 'done' } : it
+        ))
+      } catch (e: any) {
+        setBatchItems(prev => prev.map((it, idx) =>
+          idx === i ? { ...it, status: 'error', error: e.message } : it
+        ))
+      }
+    }
+
+    setBatching(false)
+    setCheckedIds(new Set())
+    notifications.show({
+      title: 'Batch import complete',
+      message: `${items.length} course${items.length !== 1 ? 's' : ''} processed`,
+      color: 'green',
+    })
+  }
+
+  const batchDone  = batchItems.filter(i => i.status === 'done').length
+  const batchTotal = batchItems.length
+
   const PANEL_HEIGHT = 'calc(100vh - 170px)'
 
   return (
@@ -311,6 +384,56 @@ export default function MoodleCoursesPage() {
         </Button>
       </Group>
 
+      {/* ── Batch action bar ──────────────────────────────────────────── */}
+      {(checkedIds.size > 0 || batching) && (
+        <Paper withBorder p="xs" radius="md"
+               style={{ background: 'var(--mantine-color-blue-0)', flexShrink: 0 }}>
+          {batching ? (
+            <Stack gap={4}>
+              <Group justify="space-between">
+                <Text size="sm" fw={500}>
+                  Importing {batchDone} / {batchTotal}…
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {batchItems.filter(i => i.status === 'error').length} errors
+                </Text>
+              </Group>
+              <Progress value={(batchDone / batchTotal) * 100} animated size="sm" />
+              <Group gap={6} wrap="wrap">
+                {batchItems.map(item => (
+                  <Badge
+                    key={item.course.id}
+                    size="xs"
+                    color={item.status === 'done' ? 'green' : item.status === 'error' ? 'red' : item.status === 'running' ? 'blue' : 'gray'}
+                  >
+                    {item.status === 'running' && <Loader size={8} color="white" style={{ marginRight: 4 }} />}
+                    {item.course.shortname}
+                  </Badge>
+                ))}
+              </Group>
+            </Stack>
+          ) : (
+            <Group justify="space-between">
+              <Text size="sm" fw={500}>
+                {checkedIds.size} course{checkedIds.size !== 1 ? 's' : ''} selected
+              </Text>
+              <Group gap="xs">
+                <Button size="xs" variant="subtle" onClick={toggleAll}>
+                  {checkedIds.size === courses.length ? 'Deselect all' : 'Select all'}
+                </Button>
+                <Button
+                  size="xs"
+                  leftSection={<IconDatabaseImport size={14} />}
+                  onClick={runBatchImport}
+                >
+                  Import selected to library
+                </Button>
+              </Group>
+            </Group>
+          )}
+        </Paper>
+      )}
+
       {!loading && courses.length === 0 && (
         <Alert color="orange" title="No courses found">
           Check your Moodle token in Settings, or verify the connection.
@@ -320,10 +443,21 @@ export default function MoodleCoursesPage() {
       {/* ── Two-panel split ───────────────────────────────────────────── */}
       <Group align="flex-start" wrap="nowrap" style={{ flex: 1, overflow: 'hidden' }} gap="sm">
 
-        {/* Left: scrollable course list */}
-        <ScrollArea style={{ width: 260, flexShrink: 0, height: '100%' }} pr={4}>
+        {/* Left: scrollable course list with checkboxes */}
+        <ScrollArea style={{ width: 280, flexShrink: 0, height: '100%' }} pr={4}>
           <Stack gap="xs">
             {loading && <Loader size="sm" />}
+            {courses.length > 1 && !loading && (
+              <Group gap="xs" px={4}>
+                <Checkbox
+                  size="xs"
+                  checked={checkedIds.size === courses.length}
+                  indeterminate={checkedIds.size > 0 && checkedIds.size < courses.length}
+                  onChange={toggleAll}
+                  label={<Text size="xs" c="dimmed">Select all</Text>}
+                />
+              </Group>
+            )}
             {courses.map(c => (
               <Paper
                 key={c.id}
@@ -339,8 +473,19 @@ export default function MoodleCoursesPage() {
                 }}
                 onClick={() => selectCourse(c)}
               >
-                <Text size="sm" fw={500} lineClamp={2}>{c.fullname}</Text>
-                <Text size="xs" c="dimmed">{c.shortname}</Text>
+                <Group gap="xs" wrap="nowrap" align="flex-start">
+                  <Checkbox
+                    size="xs"
+                    checked={checkedIds.has(c.id)}
+                    onChange={() => {}}
+                    onClick={e => toggleCheck(c.id, e)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <Box style={{ flex: 1, minWidth: 0 }}>
+                    <Text size="sm" fw={500} lineClamp={2}>{c.fullname}</Text>
+                    <Text size="xs" c="dimmed">{c.shortname}</Text>
+                  </Box>
+                </Group>
               </Paper>
             ))}
           </Stack>
@@ -376,7 +521,6 @@ export default function MoodleCoursesPage() {
                 <Divider my="xs" />
 
                 <Group gap="xs">
-                  {/* Import to Library */}
                   <Tooltip label="Pull section structure from Moodle API and save as a new library version">
                     <Button
                       size="xs"
@@ -390,7 +534,6 @@ export default function MoodleCoursesPage() {
                     </Button>
                   </Tooltip>
 
-                  {/* Check for backup file */}
                   <Tooltip label="Check Moodle's automated backup area for existing .mbz files">
                     <Button
                       size="xs"
