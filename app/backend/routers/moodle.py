@@ -4,7 +4,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..database import get_settings
+from ..database import get_settings, upsert_course, save_version
 
 router = APIRouter(prefix="/moodle", tags=["moodle"])
 
@@ -161,6 +161,110 @@ def add_forum_discussion(body: ForumPostIn):
         "messageformat": 1,
     })
     return {"ok": True, "discussion_id": result.get("discussionid")}
+
+
+# ── Import live course into local library ────────────────────────────────────
+
+class MoodleImportIn(BaseModel):
+    shortname: str
+    fullname: str
+    start_date: str = ""
+    end_date: str = ""
+    professor: str = ""
+    category: str = ""
+
+
+@router.post("/courses/{course_id}/import")
+def import_course_to_library(course_id: int, body: MoodleImportIn):
+    """Snapshot a live Moodle course's section structure into the local library."""
+    import re
+    sections_raw = _moodle_call("core_course_get_contents", {"courseid": course_id})
+
+    real_sections = [s for s in sections_raw if s.get("section", 0) != 0]
+    modules = []
+    module_contents = []
+
+    for i, sec in enumerate(real_sections[:5], start=1):
+        summary = sec.get("summary") or ""
+        plain = re.sub(r"<[^>]+>", "", summary).strip()
+
+        activities = [
+            {"id": m.get("id"), "name": m.get("name"), "modname": m.get("modname")}
+            for m in sec.get("modules", [])
+        ]
+
+        modules.append({
+            "number": i,
+            "title": sec.get("name") or f"Module {i}",
+            "objective": plain[:300],
+            "key_topics": [],
+        })
+        module_contents.append({
+            "module_num": i,
+            "lecture_html": summary,
+            "glossary_terms": [],
+            "forum_question": "",
+            "activities_snapshot": activities,
+        })
+
+    content = {
+        "course_structure":  {"course_summary": "", "modules": modules},
+        "module_contents":   module_contents,
+        "syllabus":          {},
+        "quiz_questions":    [],
+        "homework_prompts":  {},
+        "homework_spec":     {},
+        "moodle_import":     True,
+        "moodle_course_id":  course_id,
+    }
+
+    professor = body.professor or get_settings().get("professor", "")
+    upsert_course(body.shortname, body.fullname, professor, body.category, "")
+    version = save_version(body.shortname, "moodle-import",
+                           body.start_date, body.end_date, content)
+    return version
+
+
+# ── Check for existing backup files ──────────────────────────────────────────
+
+@router.get("/courses/{course_id}/backups")
+def get_course_backups(course_id: int):
+    """Check Moodle's automated backup area for existing .mbz files."""
+    s = get_settings()
+    moodle_url = s.get("moodle_url", "").rstrip("/")
+    token = s.get("moodle_token", "")
+
+    try:
+        data = _moodle_call("core_files_get_files", {
+            "contextid":    -1,
+            "contextlevel": "course",
+            "instanceid":   course_id,
+            "component":    "backup",
+            "filearea":     "automated",
+            "itemid":       0,
+            "filepath":     "/",
+            "filename":     "",
+        })
+    except Exception:
+        return {"files": []}
+
+    files = []
+    for f in data.get("files", []):
+        name = f.get("filename", "")
+        if not name or name == ".":
+            continue
+        ctx = f.get("contextid", "")
+        dl_url = (
+            f"{moodle_url}/webservice/pluginfile.php/{ctx}/backup/automated/1/{name}"
+            f"?token={token}"
+        )
+        files.append({
+            "filename":    name,
+            "size_kb":     round(f.get("filesize", 0) / 1024, 1),
+            "modified":    f.get("timemodified", 0),
+            "download_url": dl_url,
+        })
+    return {"files": files}
 
 
 # ── Capabilities summary (what each modtype supports via API) ─────────────────

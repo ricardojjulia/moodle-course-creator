@@ -89,6 +89,13 @@ export interface MoodleActivity {
   api_updatable: boolean
 }
 
+export interface MoodleBackupFile {
+  filename: string
+  size_kb: number
+  modified: number
+  download_url: string
+}
+
 export interface EvaluationCache {
   results:      LlmModel[]
   evaluated_at: string | null
@@ -146,5 +153,11 @@ export const api = {
     updateSection: (body: unknown) => post('/moodle/sections/summary', body),
     addDiscussion: (body: unknown) => post('/moodle/forum/discussion', body),
     capabilities:  ()              => get<{ modname: string; can_push: boolean; note: string }[]>('/moodle/capabilities'),
+    importCourse:  (id: number, body: {
+      shortname: string; fullname: string;
+      start_date?: string; end_date?: string;
+      professor?: string; category?: string;
+    }) => post<CourseVersion>(`/moodle/courses/${id}/import`, body),
+    checkBackups:  (id: number)    => get<{ files: MoodleBackupFile[] }>(`/moodle/courses/${id}/backups`),
   },
 }
