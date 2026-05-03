@@ -1,10 +1,16 @@
 """Course library CRUD + .mbz build endpoints."""
 
+import re
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import requests as http_requests
 
 # Make create_course.py importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -54,6 +60,106 @@ class ImportVersionIn(BaseModel):
     start_date: str = ""
     end_date: str = ""
     content: dict
+
+
+class ImportMbzIn(BaseModel):
+    download_url: str
+    filename: str = ""
+    shortname: str = ""   # override parsed value if supplied
+    fullname: str = ""    # override parsed value if supplied
+
+
+def _parse_mbz(mbz_bytes: bytes) -> dict:
+    """Extract course metadata and section structure from a .mbz ZIP."""
+    NULL = "$@NULL@$"
+
+    def clean(text: str | None) -> str:
+        if not text or text == NULL:
+            return ""
+        return re.sub(r"<[^>]+>", "", text).strip()
+
+    zf = zipfile.ZipFile(BytesIO(mbz_bytes))
+    names = set(zf.namelist())
+
+    shortname = fullname = start_date = end_date = ""
+
+    # moodle_backup.xml — top-level info
+    if "moodle_backup.xml" in names:
+        try:
+            root = ET.parse(zf.open("moodle_backup.xml")).getroot()
+            info = root.find(".//information")
+            if info is not None:
+                shortname = info.findtext("original_course_shortname", "") or ""
+                fullname  = info.findtext("original_course_fullname",  "") or ""
+                if shortname == NULL: shortname = ""
+                if fullname  == NULL: fullname  = ""
+        except Exception:
+            pass
+
+    # course/course.xml — dates + fallback names
+    if "course/course.xml" in names:
+        try:
+            root = ET.parse(zf.open("course/course.xml")).getroot()
+            shortname = shortname or root.findtext("shortname", "") or ""
+            fullname  = fullname  or root.findtext("fullname",  "") or ""
+            sd = root.findtext("startdate", "0") or "0"
+            ed = root.findtext("enddate",   "0") or "0"
+            if int(sd) > 0:
+                start_date = datetime.fromtimestamp(int(sd)).strftime("%Y-%m-%d")
+            if int(ed) > 0:
+                end_date   = datetime.fromtimestamp(int(ed)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # sections/section_NNNN/section.xml
+    section_pattern = re.compile(r"sections/section_\d+/section\.xml")
+    sections = []
+    for name in names:
+        if not section_pattern.match(name):
+            continue
+        try:
+            root = ET.parse(zf.open(name)).getroot()
+            num  = int(root.findtext("number", "0") or 0)
+            if num == 0:
+                continue
+            raw_name    = root.findtext("name",    "") or ""
+            raw_summary = root.findtext("summary", "") or ""
+            sections.append({
+                "number":    num,
+                "title":     clean(raw_name)    or f"Module {num}",
+                "objective": clean(raw_summary)[:300],
+            })
+        except Exception:
+            continue
+
+    sections.sort(key=lambda s: s["number"])
+
+    modules = [
+        {"number": s["number"], "title": s["title"],
+         "objective": s["objective"], "key_topics": []}
+        for s in sections[:5]
+    ]
+    module_contents = [
+        {"module_num": m["number"], "lecture_html": "",
+         "glossary_terms": [], "forum_question": ""}
+        for m in modules
+    ]
+
+    return {
+        "shortname":   shortname,
+        "fullname":    fullname,
+        "start_date":  start_date,
+        "end_date":    end_date,
+        "content": {
+            "course_structure":  {"course_summary": "", "modules": modules},
+            "module_contents":   module_contents,
+            "syllabus":          {},
+            "quiz_questions":    [],
+            "homework_prompts":  {},
+            "homework_spec":     {},
+            "mbz_import":        True,
+        },
+    }
 
 
 # ── Courses ───────────────────────────────────────────────────────────────────
@@ -115,6 +221,34 @@ def import_version(shortname: str, body: ImportVersionIn):
                   body.category, "")
     return save_version(shortname, body.model_used,
                         body.start_date, body.end_date, body.content)
+
+
+# ── Import .mbz from a URL (e.g. Moodle backup download) ────────────────────
+
+@router.post("/import-mbz")
+def import_mbz_from_url(body: ImportMbzIn):
+    """Download a .mbz from a URL, parse its structure, save as a library version."""
+    try:
+        resp = http_requests.get(body.download_url, timeout=60)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to download backup file: {e}")
+
+    try:
+        parsed = _parse_mbz(resp.content)
+    except Exception as e:
+        raise HTTPException(422, f"Could not parse .mbz file: {e}")
+
+    shortname = body.shortname or parsed["shortname"] or "mbz-import"
+    fullname  = body.fullname  or parsed["fullname"]  or shortname
+
+    upsert_course(shortname, fullname, "", "", "")
+    version = save_version(
+        shortname, "mbz-import",
+        parsed["start_date"], parsed["end_date"],
+        parsed["content"],
+    )
+    return version
 
 
 # ── Generate (calls LLM pipeline) ────────────────────────────────────────────

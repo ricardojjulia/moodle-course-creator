@@ -124,6 +124,8 @@ export const api = {
     version:    (sn: string, vid: number) =>
                                    get<CourseVersion>(`/courses/${sn}/versions/${vid}`),
     generate:      (body: unknown) => post<CourseVersion>('/courses/generate', body),
+    importMbz:     (body: { download_url: string; filename?: string; shortname?: string; fullname?: string }) =>
+                     post<CourseVersion>('/courses/import-mbz', body),
     build:         (sn: string, vid: number) =>
                      post<{ filename: string; size_kb: number }>(`/courses/${sn}/versions/${vid}/build`),
     downloadUrl:   (sn: string, vid: number) =>

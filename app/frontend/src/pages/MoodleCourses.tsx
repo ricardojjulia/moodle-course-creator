@@ -171,9 +171,10 @@ export default function MoodleCoursesPage() {
   const [libVersions, setLibVersions] = useState<CourseVersion[]>([])
   const [loading, setLoading]       = useState(false)
   const [loadingSec, setLoadingSec] = useState(false)
-  const [importing, setImporting]   = useState(false)
-  const [backupFiles, setBackupFiles]  = useState<MoodleBackupFile[] | null>(null)
+  const [importing, setImporting]       = useState(false)
+  const [backupFiles, setBackupFiles]   = useState<MoodleBackupFile[] | null>(null)
   const [checkingBackup, setCheckingBackup] = useState(false)
+  const [addingBackup, setAddingBackup] = useState<string | null>(null) // filename in progress
 
   const loadCourses = () => {
     setLoading(true)
@@ -253,6 +254,32 @@ export default function MoodleCoursesPage() {
       notifications.show({ title: 'Check failed', message: e.message, color: 'red' })
     } finally {
       setCheckingBackup(false)
+    }
+  }
+
+  const addBackupToLibrary = async (file: MoodleBackupFile) => {
+    setAddingBackup(file.filename)
+    try {
+      await api.courses.importMbz({
+        download_url: file.download_url,
+        filename:     file.filename,
+        shortname:    selected?.shortname,
+        fullname:     selected?.fullname,
+      })
+      notifications.show({
+        title: 'Added to library!',
+        message: `${file.filename} imported as a new version`,
+        color: 'green',
+        icon: <IconCheck />,
+      })
+      if (selected) {
+        const vers = await api.courses.versions(selected.shortname)
+        setLibVersions(vers)
+      }
+    } catch (e: any) {
+      notifications.show({ title: 'Import failed', message: e.message, color: 'red', icon: <IconX /> })
+    } finally {
+      setAddingBackup(null)
     }
   }
 
@@ -381,19 +408,30 @@ export default function MoodleCoursesPage() {
                   <Stack gap={4} mt="sm">
                     <Text size="xs" fw={500} c="violet">Backup files found:</Text>
                     {backupFiles.map(f => (
-                      <Group key={f.filename} gap="xs" justify="space-between">
-                        <Text size="xs">{f.filename}</Text>
-                        <Group gap={6}>
+                      <Group key={f.filename} gap="xs" justify="space-between" wrap="nowrap">
+                        <Text size="xs" style={{ flex: 1 }} lineClamp={1}>{f.filename}</Text>
+                        <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
                           <Text size="xs" c="dimmed">{f.size_kb} KB</Text>
                           <Text size="xs" c="dimmed">
                             {f.modified ? new Date(f.modified * 1000).toLocaleDateString() : ''}
                           </Text>
-                          <ActionIcon
-                            size="xs" color="green" variant="light"
-                            component="a" href={f.download_url} download={f.filename}
-                          >
-                            <IconDownload size={12} />
-                          </ActionIcon>
+                          <Tooltip label="Download .mbz">
+                            <ActionIcon
+                              size="xs" color="green" variant="light"
+                              component="a" href={f.download_url} download={f.filename}
+                            >
+                              <IconDownload size={12} />
+                            </ActionIcon>
+                          </Tooltip>
+                          <Tooltip label="Parse this .mbz and save as a library version">
+                            <ActionIcon
+                              size="xs" color="blue" variant="light"
+                              loading={addingBackup === f.filename}
+                              onClick={() => addBackupToLibrary(f)}
+                            >
+                              <IconDatabaseImport size={12} />
+                            </ActionIcon>
+                          </Tooltip>
                         </Group>
                       </Group>
                     ))}
