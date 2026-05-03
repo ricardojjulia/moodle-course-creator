@@ -149,6 +149,8 @@ export const api = {
                      del<{ deleted: string }>(`/courses/${sn}`),
     deleteVersion: (sn: string, vid: number) =>
                      del<{ deleted: number }>(`/courses/${sn}/versions/${vid}`),
+    bulkDelete:    (shortnames: string[]) =>
+                     post<{ deleted: string[]; not_found: string[] }>('/courses/bulk-delete', { shortnames }),
   },
 
   // ── LLM ───────────────────────────────────────────────────────────────────
@@ -177,5 +179,9 @@ export const api = {
       instance?: string;
     }) => post<CourseVersion>(`/moodle/courses/${id}/import`, body),
     checkBackups:  (id: number)    => get<{ files: MoodleBackupFile[] }>(`/moodle/courses/${id}/backups`),
+    moduleContent: (courseId: number, cmid: number) =>
+                     get<{ id: number; name: string; modname: string; content_html: string; url: string }>(
+                       `/moodle/courses/${courseId}/modules/${cmid}`
+                     ),
   },
 }

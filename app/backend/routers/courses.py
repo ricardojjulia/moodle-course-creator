@@ -224,6 +224,24 @@ def import_version(shortname: str, body: ImportVersionIn):
                         body.start_date, body.end_date, body.content)
 
 
+# ── Bulk delete ───────────────────────────────────────────────────────────────
+
+class BulkDeleteIn(BaseModel):
+    shortnames: list[str]
+
+
+@router.post("/bulk-delete")
+def bulk_delete_courses(body: BulkDeleteIn):
+    """Delete multiple courses and all their versions."""
+    deleted, not_found = [], []
+    for sn in body.shortnames:
+        if delete_course(sn):
+            deleted.append(sn)
+        else:
+            not_found.append(sn)
+    return {"deleted": deleted, "not_found": not_found}
+
+
 # ── Import .mbz from a URL (e.g. Moodle backup download) ────────────────────
 
 @router.post("/import-mbz")

@@ -189,10 +189,22 @@ def import_course_to_library(course_id: int, body: MoodleImportIn):
         summary = sec.get("summary") or ""
         plain = re.sub(r"<[^>]+>", "", summary).strip()
 
-        activities = [
-            {"id": m.get("id"), "name": m.get("name"), "modname": m.get("modname")}
-            for m in sec.get("modules", [])
-        ]
+        activities = []
+        for m in sec.get("modules", []):
+            # Capture inline content for pages / assignments
+            content_html = ""
+            for c in m.get("contents", []):
+                if c.get("type") == "content":
+                    content_html = c.get("content", "")
+                    break
+            if not content_html:
+                content_html = m.get("description", "") or ""
+            activities.append({
+                "id":           m.get("id"),
+                "name":         m.get("name"),
+                "modname":      m.get("modname"),
+                "content_html": content_html,
+            })
 
         modules.append({
             "number": i,
@@ -225,6 +237,35 @@ def import_course_to_library(course_id: int, body: MoodleImportIn):
     version = save_version(body.shortname, "moodle-import",
                            body.start_date, body.end_date, content)
     return version
+
+
+# ── Single module content ─────────────────────────────────────────────────────
+
+@router.get("/courses/{course_id}/modules/{cmid}")
+def get_module_content(course_id: int, cmid: int):
+    """Return the HTML body and description of a single course module."""
+    sections = _moodle_call("core_course_get_contents", {"courseid": course_id})
+    for sec in sections:
+        for mod in sec.get("modules", []):
+            if mod.get("id") != cmid:
+                continue
+            # Inline content (page body, label HTML, etc.)
+            content_html = ""
+            for c in mod.get("contents", []):
+                if c.get("type") == "content":
+                    content_html = c.get("content", "")
+                    break
+            # Assignment / forum description fallback
+            if not content_html:
+                content_html = mod.get("description", "")
+            return {
+                "id":           cmid,
+                "name":         mod.get("name", ""),
+                "modname":      mod.get("modname", ""),
+                "content_html": content_html,
+                "url":          mod.get("url", ""),
+            }
+    raise HTTPException(404, f"Module {cmid} not found in course {course_id}")
 
 
 # ── Check for existing backup files ──────────────────────────────────────────

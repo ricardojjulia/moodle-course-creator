@@ -3,11 +3,14 @@ import {
   Stack, Title, Text, Badge, Group, Button,
   Table, Loader, Alert, ActionIcon, Tooltip, Paper,
   ThemeIcon, Divider, ScrollArea, Accordion, Box,
+  Modal, TypographyStylesProvider, Checkbox, Collapse,
+  Progress,
 } from '@mantine/core'
 import {
-  IconDownload, IconBook, IconBuildingArch,
+  IconDownload, IconBuildingArch,
   IconRefresh, IconTrash, IconCheck, IconX,
-  IconCloud, IconHome,
+  IconCloud, IconHome, IconExternalLink,
+  IconChevronDown, IconChevronRight,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion } from '../api/client'
@@ -29,6 +32,109 @@ function DeleteConfirm({ onConfirm, onCancel, loading }: {
   )
 }
 
+// ── Activity detail modal ─────────────────────────────────────────────────────
+
+interface ActivitySnap {
+  id: number
+  name: string
+  modname: string
+  content_html?: string
+}
+
+interface ActivityModalProps {
+  activity: ActivitySnap | null
+  moodleCourseId?: number
+  onClose: () => void
+}
+
+function ActivityDetailModal({ activity, moodleCourseId, onClose }: ActivityModalProps) {
+  const [html,    setHtml]    = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [tried,   setTried]   = useState(false)
+
+  useEffect(() => {
+    if (!activity) return
+    setHtml(null)
+    setTried(false)
+    // If content is already stored locally, use it
+    if (activity.content_html?.trim()) {
+      setHtml(activity.content_html)
+      setTried(true)
+    }
+  }, [activity?.id])
+
+  const fetchFromMoodle = async () => {
+    if (!activity || !moodleCourseId) return
+    setLoading(true)
+    try {
+      const res = await api.moodle.moduleContent(moodleCourseId, activity.id)
+      setHtml(res.content_html || '<em>No content available for this activity.</em>')
+    } catch (e: any) {
+      setHtml(`<em>Could not load from Moodle: ${e.message}</em>`)
+    } finally {
+      setLoading(false)
+      setTried(true)
+    }
+  }
+
+  if (!activity) return null
+
+  const modColor: Record<string, string> = {
+    page: 'blue', assign: 'orange', forum: 'teal',
+    quiz: 'red', resource: 'gray', label: 'gray',
+  }
+
+  return (
+    <Modal
+      opened={!!activity}
+      onClose={onClose}
+      title={
+        <Group gap="xs">
+          <Badge color={modColor[activity.modname] ?? 'gray'}>{activity.modname}</Badge>
+          <Text fw={600} size="sm" lineClamp={2}>{activity.name}</Text>
+        </Group>
+      }
+      size="xl"
+      scrollAreaComponent={ScrollArea.Autosize}
+    >
+      {!tried && !loading && (
+        <Stack align="center" py="xl" gap="sm">
+          <Text size="sm" c="dimmed">Content not stored locally.</Text>
+          {moodleCourseId ? (
+            <Button
+              size="sm"
+              variant="light"
+              leftSection={<IconExternalLink size={14} />}
+              onClick={fetchFromMoodle}
+            >
+              Load from Moodle
+            </Button>
+          ) : (
+            <Text size="xs" c="dimmed">No Moodle source available for this version.</Text>
+          )}
+        </Stack>
+      )}
+
+      {loading && (
+        <Stack align="center" py="xl">
+          <Loader />
+          <Text size="sm" c="dimmed">Fetching from Moodle…</Text>
+        </Stack>
+      )}
+
+      {tried && !loading && html && (
+        html.trim().startsWith('<') ? (
+          <TypographyStylesProvider>
+            <div dangerouslySetInnerHTML={{ __html: html }} />
+          </TypographyStylesProvider>
+        ) : (
+          <Text size="sm">{html}</Text>
+        )
+      )}
+    </Modal>
+  )
+}
+
 // ── Module detail panel ───────────────────────────────────────────────────────
 
 interface ModuleProps {
@@ -37,79 +143,99 @@ interface ModuleProps {
     lecture_html?: string
     glossary_terms?: string[]
     forum_question?: string
-    activities_snapshot?: { id: number; name: string; modname: string }[]
+    activities_snapshot?: ActivitySnap[]
   }
+  moodleCourseId?: number
 }
 
-function ModulePanel({ mod, mc }: ModuleProps) {
+function ModulePanel({ mod, mc, moodleCourseId }: ModuleProps) {
+  const [activeActivity, setActiveActivity] = useState<ActivitySnap | null>(null)
+
   const glossaryCount = mc?.glossary_terms?.length ?? 0
   const activities    = mc?.activities_snapshot ?? []
   const hasLecture    = !!(mc?.lecture_html?.trim())
 
   return (
-    <Accordion.Item value={String(mod.number)}>
-      <Accordion.Control>
-        <Group justify="space-between" wrap="nowrap" pr="md">
-          <Text size="sm" fw={600} lineClamp={1}>
-            {mod.number}. {mod.title}
-          </Text>
-          <Group gap={4} style={{ flexShrink: 0 }}>
-            {activities.length > 0 && (
-              <Badge size="xs" variant="outline" color="gray">
-                {activities.length} activities
-              </Badge>
+    <>
+      <Accordion.Item value={String(mod.number)}>
+        <Accordion.Control>
+          <Group justify="space-between" wrap="nowrap" pr="md">
+            <Text size="sm" fw={600} lineClamp={1}>
+              {mod.number}. {mod.title}
+            </Text>
+            <Group gap={4} style={{ flexShrink: 0 }}>
+              {activities.length > 0 && (
+                <Badge size="xs" variant="outline" color="gray">
+                  {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
+                </Badge>
+              )}
+              {glossaryCount > 0 && (
+                <Badge size="xs" variant="outline" color="teal">
+                  {glossaryCount} terms
+                </Badge>
+              )}
+              {mc?.forum_question && (
+                <Badge size="xs" variant="outline" color="blue">forum</Badge>
+              )}
+              {hasLecture && (
+                <Badge size="xs" variant="outline" color="violet">lecture</Badge>
+              )}
+            </Group>
+          </Group>
+        </Accordion.Control>
+        <Accordion.Panel>
+          <Stack gap="xs">
+            {mod.objective && (
+              <Text size="xs" c="dimmed">{mod.objective}</Text>
             )}
-            {glossaryCount > 0 && (
-              <Badge size="xs" variant="outline" color="teal">
-                {glossaryCount} terms
-              </Badge>
+            {mod.key_topics && mod.key_topics.length > 0 && (
+              <Group gap={4} wrap="wrap">
+                {mod.key_topics.map(t => (
+                  <Badge key={t} size="xs" variant="light" color="gray">{t}</Badge>
+                ))}
+              </Group>
+            )}
+            {activities.length > 0 && (
+              <Table withTableBorder={false} withRowBorders highlightOnHover>
+                <Table.Tbody>
+                  {activities.map(a => (
+                    <Table.Tr
+                      key={a.id}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => setActiveActivity(a)}
+                    >
+                      <Table.Td w={80}>
+                        <Badge size="xs" variant="outline">{a.modname}</Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="xs">{a.name}</Text>
+                      </Table.Td>
+                      <Table.Td w={24}>
+                        <ActionIcon size="xs" variant="subtle" color="blue">
+                          <IconExternalLink size={11} />
+                        </ActionIcon>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
             )}
             {mc?.forum_question && (
-              <Badge size="xs" variant="outline" color="blue">forum</Badge>
+              <Text size="xs" c="blue">
+                <strong>Forum: </strong>{mc.forum_question.slice(0, 200)}
+                {mc.forum_question.length > 200 ? '…' : ''}
+              </Text>
             )}
-            {hasLecture && (
-              <Badge size="xs" variant="outline" color="violet">lecture</Badge>
-            )}
-          </Group>
-        </Group>
-      </Accordion.Control>
-      <Accordion.Panel>
-        <Stack gap="xs">
-          {mod.objective && (
-            <Text size="xs" c="dimmed">{mod.objective}</Text>
-          )}
-          {mod.key_topics && mod.key_topics.length > 0 && (
-            <Group gap={4} wrap="wrap">
-              {mod.key_topics.map(t => (
-                <Badge key={t} size="xs" variant="light" color="gray">{t}</Badge>
-              ))}
-            </Group>
-          )}
-          {activities.length > 0 && (
-            <Table withTableBorder={false} withRowBorders={false}>
-              <Table.Tbody>
-                {activities.map(a => (
-                  <Table.Tr key={a.id}>
-                    <Table.Td w={80}>
-                      <Badge size="xs" variant="outline">{a.modname}</Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs">{a.name}</Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          )}
-          {mc?.forum_question && (
-            <Text size="xs" c="blue">
-              <strong>Forum: </strong>{mc.forum_question.slice(0, 200)}
-              {mc.forum_question.length > 200 ? '…' : ''}
-            </Text>
-          )}
-        </Stack>
-      </Accordion.Panel>
-    </Accordion.Item>
+          </Stack>
+        </Accordion.Panel>
+      </Accordion.Item>
+
+      <ActivityDetailModal
+        activity={activeActivity}
+        moodleCourseId={moodleCourseId}
+        onClose={() => setActiveActivity(null)}
+      />
+    </>
   )
 }
 
@@ -338,6 +464,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
               key={mod.number}
               mod={mod}
               mc={mcByNum[mod.number]}
+              moodleCourseId={content.moodle_course_id}
             />
           ))}
         </Accordion>
@@ -352,25 +479,102 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
   )
 }
 
-// ── Instance group header ─────────────────────────────────────────────────────
+// ── Instance group (collapsible, with checkboxes) ─────────────────────────────
 
-function InstanceHeader({ name, courses }: { name: string; courses: Course[] }) {
-  const isLocal     = name === 'Local'
-  const totalVers   = courses.reduce((s, c) => s + c.version_count, 0)
+interface InstanceGroupProps {
+  name: string
+  courses: Course[]
+  selected: Course | null
+  checkedShortnames: Set<string>
+  onSelect: (c: Course) => void
+  onToggle: (shortname: string) => void
+  onToggleAll: (instance: string, checked: boolean) => void
+}
+
+function InstanceGroup({
+  name, courses, selected, checkedShortnames,
+  onSelect, onToggle, onToggleAll,
+}: InstanceGroupProps) {
+  const [open, setOpen] = useState(true)
+  const isLocal       = name === 'Local'
+  const totalVers     = courses.reduce((s, c) => s + c.version_count, 0)
+  const checkedHere   = courses.filter(c => checkedShortnames.has(c.shortname)).length
+  const allChecked    = checkedHere === courses.length
+  const someChecked   = checkedHere > 0 && !allChecked
 
   return (
-    <Group gap="xs" mt="xs" mb={2}>
-      <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
-        {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
-      </ThemeIcon>
-      <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}>{name}</Text>
-      <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
-        {courses.length} course{courses.length !== 1 ? 's' : ''}
-      </Badge>
-      <Badge size="xs" variant="outline" color="gray">
-        {totalVers} version{totalVers !== 1 ? 's' : ''}
-      </Badge>
-    </Group>
+    <Box>
+      {/* Instance header row */}
+      <Group
+        gap="xs"
+        mt="xs"
+        mb={2}
+        px={4}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Checkbox
+          size="xs"
+          checked={allChecked}
+          indeterminate={someChecked}
+          onClick={e => e.stopPropagation()}
+          onChange={e => onToggleAll(name, e.currentTarget.checked)}
+        />
+        <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
+          {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
+        </ThemeIcon>
+        <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'} style={{ flex: 1 }}>{name}</Text>
+        <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
+          {courses.length}
+        </Badge>
+        <Badge size="xs" variant="outline" color="gray">
+          {totalVers}v
+        </Badge>
+        <ActionIcon size="xs" variant="subtle" color="gray">
+          {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+        </ActionIcon>
+      </Group>
+
+      {/* Course list */}
+      <Collapse in={open}>
+        <Stack gap={2} pl={4}>
+          {courses.map(c => (
+            <Group key={c.shortname} gap={4} wrap="nowrap">
+              <Checkbox
+                size="xs"
+                checked={checkedShortnames.has(c.shortname)}
+                onChange={() => onToggle(c.shortname)}
+                onClick={e => e.stopPropagation()}
+              />
+              <Paper
+                withBorder
+                px="sm"
+                py={6}
+                radius="sm"
+                style={{
+                  cursor: 'pointer', flex: 1,
+                  background: selected?.shortname === c.shortname
+                    ? 'var(--mantine-color-blue-0)' : undefined,
+                  borderColor: selected?.shortname === c.shortname
+                    ? 'var(--mantine-color-blue-4)' : undefined,
+                }}
+                onClick={() => onSelect(c)}
+              >
+                <Group justify="space-between" wrap="nowrap">
+                  <Box miw={0}>
+                    <Text size="xs" fw={500} lineClamp={1}>{c.fullname}</Text>
+                    <Text size="xs" c="dimmed">{c.shortname}</Text>
+                  </Box>
+                  <Badge size="xs" color="blue" variant="light" style={{ flexShrink: 0 }}>
+                    {c.version_count}v
+                  </Badge>
+                </Group>
+              </Paper>
+            </Group>
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
   )
 }
 
@@ -380,9 +584,14 @@ export default function LibraryPage() {
   const [courses,  setCourses]  = useState<Course[]>([])
   const [loading,  setLoading]  = useState(true)
   const [selected, setSelected] = useState<Course | null>(null)
+  const [checked,  setChecked]  = useState<Set<string>>(new Set())
+  const [bulking,  setBulking]  = useState(false)
+  const [bulkDone, setBulkDone] = useState(0)
+  const [confirmBulk, setConfirmBulk] = useState(false)
 
   const load = () => {
     setLoading(true)
+    setChecked(new Set())
     api.courses.list()
       .then(c => { setCourses(c); setLoading(false) })
       .catch(e => {
@@ -393,9 +602,40 @@ export default function LibraryPage() {
 
   useEffect(load, [])
 
-  const handleDeleted = () => {
-    setSelected(null)
-    load()
+  const handleDeleted = () => { setSelected(null); load() }
+
+  const toggleOne = (sn: string) =>
+    setChecked(prev => { const n = new Set(prev); n.has(sn) ? n.delete(sn) : n.add(sn); return n })
+
+  const toggleAll = (instance: string, checked: boolean) => {
+    const group = groups[instance] ?? []
+    setChecked(prev => {
+      const n = new Set(prev)
+      group.forEach(c => checked ? n.add(c.shortname) : n.delete(c.shortname))
+      return n
+    })
+  }
+
+  const runBulkDelete = async () => {
+    const list = [...checked]
+    setBulking(true)
+    setBulkDone(0)
+    setConfirmBulk(false)
+    try {
+      const res = await api.courses.bulkDelete(list)
+      setBulkDone(res.deleted.length)
+      notifications.show({
+        title: 'Deleted',
+        message: `${res.deleted.length} course${res.deleted.length !== 1 ? 's' : ''} removed`,
+        color: 'orange',
+      })
+      if (selected && res.deleted.includes(selected.shortname)) setSelected(null)
+      load()
+    } catch (e: any) {
+      notifications.show({ title: 'Bulk delete failed', message: e.message, color: 'red' })
+    } finally {
+      setBulking(false)
+    }
   }
 
   // Group by instance; Local first
@@ -427,6 +667,45 @@ export default function LibraryPage() {
         </Button>
       </Group>
 
+      {/* Bulk action bar */}
+      {(checked.size > 0 || bulking) && (
+        <Paper withBorder p="xs" radius="md"
+               style={{ background: 'var(--mantine-color-red-0)', flexShrink: 0 }}>
+          {bulking ? (
+            <Stack gap={4}>
+              <Text size="sm" fw={500}>Deleting {bulkDone} / {checked.size}…</Text>
+              <Progress value={(bulkDone / checked.size) * 100} animated size="sm" color="red" />
+            </Stack>
+          ) : confirmBulk ? (
+            <Group justify="space-between">
+              <Text size="sm" fw={500} c="red">
+                Delete {checked.size} course{checked.size !== 1 ? 's' : ''} and all their versions?
+              </Text>
+              <Group gap="xs">
+                <Button size="xs" color="red" onClick={runBulkDelete}>Yes, delete</Button>
+                <Button size="xs" variant="subtle" onClick={() => setConfirmBulk(false)}>Cancel</Button>
+              </Group>
+            </Group>
+          ) : (
+            <Group justify="space-between">
+              <Text size="sm" fw={500}>{checked.size} selected</Text>
+              <Group gap="xs">
+                <Button size="xs" variant="subtle" onClick={() => setChecked(new Set())}>
+                  Clear
+                </Button>
+                <Button
+                  size="xs" color="red"
+                  leftSection={<IconTrash size={14} />}
+                  onClick={() => setConfirmBulk(true)}
+                >
+                  Delete selected
+                </Button>
+              </Group>
+            </Group>
+          )}
+        </Paper>
+      )}
+
       {!loading && courses.length === 0 && (
         <Alert color="blue" title="No courses yet">
           Use the <strong>New Course</strong> tab to generate your first course,
@@ -437,45 +716,21 @@ export default function LibraryPage() {
       {/* Two-panel split */}
       <Group align="flex-start" wrap="nowrap" style={{ flex: 1, overflow: 'hidden' }} gap="sm">
 
-        {/* Left: course list grouped by instance */}
-        <ScrollArea style={{ width: 280, flexShrink: 0, height: '100%' }} pr={4}>
+        {/* Left: collapsible instance groups */}
+        <ScrollArea style={{ width: 300, flexShrink: 0, height: '100%' }} pr={4}>
           <Stack gap={2}>
             {loading && <Loader size="sm" />}
             {sortedInstances.map(instance => (
-              <Box key={instance}>
-                <InstanceHeader name={instance} courses={groups[instance]} />
-                <Stack gap={2}>
-                  {groups[instance].map(c => (
-                    <Paper
-                      key={c.shortname}
-                      withBorder
-                      px="sm"
-                      py={6}
-                      radius="sm"
-                      style={{
-                        cursor: 'pointer',
-                        background: selected?.shortname === c.shortname
-                          ? 'var(--mantine-color-blue-0)'
-                          : undefined,
-                        borderColor: selected?.shortname === c.shortname
-                          ? 'var(--mantine-color-blue-4)'
-                          : undefined,
-                      }}
-                      onClick={() => setSelected(c)}
-                    >
-                      <Group justify="space-between" wrap="nowrap">
-                        <Box style={{ flex: 1, minWidth: 0 }}>
-                          <Text size="xs" fw={500} lineClamp={1}>{c.fullname}</Text>
-                          <Text size="xs" c="dimmed">{c.shortname}</Text>
-                        </Box>
-                        <Badge size="xs" color="blue" variant="light" style={{ flexShrink: 0 }}>
-                          {c.version_count}v
-                        </Badge>
-                      </Group>
-                    </Paper>
-                  ))}
-                </Stack>
-              </Box>
+              <InstanceGroup
+                key={instance}
+                name={instance}
+                courses={groups[instance]}
+                selected={selected}
+                checkedShortnames={checked}
+                onSelect={setSelected}
+                onToggle={toggleOne}
+                onToggleAll={toggleAll}
+              />
             ))}
           </Stack>
         </ScrollArea>
