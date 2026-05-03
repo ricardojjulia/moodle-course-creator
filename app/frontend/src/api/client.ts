@@ -109,13 +109,27 @@ export interface AppSettings {
   moodle_token_masked: string
   llm_url: string
   last_model: string
+  active_instance: string
+}
+
+export interface MoodleInstance {
+  name: string
+  url: string
+  token_masked: string
+  active: boolean
+  added_at: string
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 export const api = {
   settings: {
-    get: ()           => get<AppSettings>('/settings'),
-    save: (s: Partial<AppSettings>) => put<AppSettings>('/settings', s),
+    get:              ()                    => get<AppSettings>('/settings'),
+    save:             (s: Partial<AppSettings>) => put<AppSettings>('/settings', s),
+    listInstances:    ()                    => get<MoodleInstance[]>('/settings/instances'),
+    saveInstance:     (b: { name: string; url: string; token: string }) =>
+                        post<{ ok: boolean; updated: boolean }>('/settings/instances', b),
+    activateInstance: (name: string)        => post<{ ok: boolean }>(`/settings/instances/${encodeURIComponent(name)}/activate`),
+    deleteInstance:   (name: string)        => del<{ ok: boolean }>(`/settings/instances/${encodeURIComponent(name)}`),
   },
 
   // ── Library ────────────────────────────────────────────────────────────────
