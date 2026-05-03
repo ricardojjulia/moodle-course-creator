@@ -67,6 +67,7 @@ class ImportMbzIn(BaseModel):
     filename: str = ""
     shortname: str = ""   # override parsed value if supplied
     fullname: str = ""    # override parsed value if supplied
+    instance: str = "Local"
 
 
 def _parse_mbz(mbz_bytes: bytes) -> dict:
@@ -218,7 +219,7 @@ def remove_version(shortname: str, version_id: int):
 def import_version(shortname: str, body: ImportVersionIn):
     """Save an existing content dict as a new version (no LLM needed)."""
     upsert_course(shortname, body.fullname, body.professor,
-                  body.category, "")
+                  body.category, "", instance="Local")
     return save_version(shortname, body.model_used,
                         body.start_date, body.end_date, body.content)
 
@@ -242,7 +243,7 @@ def import_mbz_from_url(body: ImportMbzIn):
     shortname = body.shortname or parsed["shortname"] or "mbz-import"
     fullname  = body.fullname  or parsed["fullname"]  or shortname
 
-    upsert_course(shortname, fullname, "", "", "")
+    upsert_course(shortname, fullname, "", "", "", instance=body.instance)
     version = save_version(
         shortname, "mbz-import",
         parsed["start_date"], parsed["end_date"],
@@ -305,7 +306,7 @@ def generate_course(body: GenerateIn):
     }
 
     upsert_course(body.shortname, body.fullname, body.professor,
-                  body.category, body.prompt)
+                  body.category, body.prompt, instance="Local")
     version = save_version(body.shortname, body.model_id,
                            body.start_date, body.end_date, content)
     return version

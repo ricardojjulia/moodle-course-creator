@@ -6,11 +6,14 @@ import {
 } from '@mantine/core'
 import {
   IconChevronDown, IconChevronRight, IconDownload,
-  IconBook, IconCalendar, IconBuildingArch,
+  IconBook, IconBuildingArch,
   IconRefresh, IconTrash, IconCheck, IconX,
+  IconCloud, IconHome,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion } from '../api/client'
+
+// ── Delete confirm ────────────────────────────────────────────────────────────
 
 function DeleteConfirm({ onConfirm, onCancel, loading }: {
   onConfirm: () => void
@@ -29,14 +32,16 @@ function DeleteConfirm({ onConfirm, onCancel, loading }: {
   )
 }
 
+// ── Version row ───────────────────────────────────────────────────────────────
+
 function VersionRow({ course, version, onDeleted }: {
   course: Course
   version: CourseVersion
   onDeleted: () => void
 }) {
-  const [building,  setBuilding]  = useState(false)
+  const [building,   setBuilding]   = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const [deleting,  setDeleting]  = useState(false)
+  const [deleting,   setDeleting]   = useState(false)
 
   const handleBuild = async () => {
     setBuilding(true)
@@ -115,6 +120,8 @@ function VersionRow({ course, version, onDeleted }: {
   )
 }
 
+// ── Course card ───────────────────────────────────────────────────────────────
+
 function CourseCard({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
   const [open,       setOpen]       = useState(false)
   const [versions,   setVersions]   = useState<CourseVersion[]>([])
@@ -154,7 +161,7 @@ function CourseCard({ course, onDeleted }: { course: Course; onDeleted: () => vo
     const v = await api.courses.versions(course.shortname)
     setVersions(v)
     if (v.length === 0) setOpen(false)
-    onDeleted()  // refresh parent count
+    onDeleted()
   }
 
   return (
@@ -168,8 +175,10 @@ function CourseCard({ course, onDeleted }: { course: Course; onDeleted: () => vo
             <Text fw={600}>{course.fullname}</Text>
             <Group gap="xs">
               <Text size="xs" c="dimmed">{course.shortname}</Text>
-              <Text size="xs" c="dimmed">·</Text>
-              <Text size="xs" c="dimmed">{course.professor}</Text>
+              {course.professor && <>
+                <Text size="xs" c="dimmed">·</Text>
+                <Text size="xs" c="dimmed">{course.professor}</Text>
+              </>}
             </Group>
           </div>
         </Group>
@@ -228,6 +237,28 @@ function CourseCard({ course, onDeleted }: { course: Course; onDeleted: () => vo
   )
 }
 
+// ── Instance group header ─────────────────────────────────────────────────────
+
+function InstanceHeader({ name }: { name: string }) {
+  const isLocal = name === 'Local'
+  return (
+    <Group gap="xs" mt="xs">
+      <ThemeIcon
+        size="sm"
+        variant="light"
+        color={isLocal ? 'gray' : 'blue'}
+      >
+        {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
+      </ThemeIcon>
+      <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}>
+        {name}
+      </Text>
+    </Group>
+  )
+}
+
+// ── Library page ──────────────────────────────────────────────────────────────
+
 export default function LibraryPage() {
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
@@ -241,6 +272,20 @@ export default function LibraryPage() {
   }
 
   useEffect(load, [])
+
+  // Group by instance; Local always first
+  const groups = courses.reduce<Record<string, Course[]>>((acc, c) => {
+    const key = c.instance || 'Local'
+    if (!acc[key]) acc[key] = []
+    acc[key].push(c)
+    return acc
+  }, {})
+
+  const sortedInstances = Object.keys(groups).sort((a, b) => {
+    if (a === 'Local') return -1
+    if (b === 'Local') return 1
+    return a.localeCompare(b)
+  })
 
   return (
     <Stack>
@@ -259,8 +304,13 @@ export default function LibraryPage() {
         </Alert>
       )}
 
-      {courses.map(c => (
-        <CourseCard key={c.shortname} course={c} onDeleted={load} />
+      {sortedInstances.map(instance => (
+        <Stack key={instance} gap="xs">
+          <InstanceHeader name={instance} />
+          {groups[instance].map(c => (
+            <CourseCard key={c.shortname} course={c} onDeleted={load} />
+          ))}
+        </Stack>
       ))}
     </Stack>
   )

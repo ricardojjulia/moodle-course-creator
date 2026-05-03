@@ -172,6 +172,7 @@ class MoodleImportIn(BaseModel):
     end_date: str = ""
     professor: str = ""
     category: str = ""
+    instance: str = "Local"
 
 
 @router.post("/courses/{course_id}/import")
@@ -219,7 +220,8 @@ def import_course_to_library(course_id: int, body: MoodleImportIn):
     }
 
     professor = body.professor or get_settings().get("professor", "")
-    upsert_course(body.shortname, body.fullname, professor, body.category, "")
+    upsert_course(body.shortname, body.fullname, professor, body.category, "",
+                  instance=body.instance or "Local")
     version = save_version(body.shortname, "moodle-import",
                            body.start_date, body.end_date, content)
     return version

@@ -224,6 +224,7 @@ export default function MoodleCoursesPage() {
         fullname:   selected.fullname,
         start_date: ts2date(selected.startdate),
         end_date:   ts2date(selected.enddate),
+        instance:   siteName || 'Moodle',
       })
       notifications.show({
         title: 'Imported!',
@@ -265,6 +266,7 @@ export default function MoodleCoursesPage() {
         filename:     file.filename,
         shortname:    selected?.shortname,
         fullname:     selected?.fullname,
+        instance:     siteName || 'Moodle',
       })
       notifications.show({
         title: 'Added to library!',

@@ -26,6 +26,7 @@ export interface Course {
   professor: string
   category: string
   prompt: string
+  instance: string
   created_at: string
   version_count: number
   latest_version: number | null
@@ -124,7 +125,7 @@ export const api = {
     version:    (sn: string, vid: number) =>
                                    get<CourseVersion>(`/courses/${sn}/versions/${vid}`),
     generate:      (body: unknown) => post<CourseVersion>('/courses/generate', body),
-    importMbz:     (body: { download_url: string; filename?: string; shortname?: string; fullname?: string }) =>
+    importMbz:     (body: { download_url: string; filename?: string; shortname?: string; fullname?: string; instance?: string }) =>
                      post<CourseVersion>('/courses/import-mbz', body),
     build:         (sn: string, vid: number) =>
                      post<{ filename: string; size_kb: number }>(`/courses/${sn}/versions/${vid}/build`),
@@ -159,6 +160,7 @@ export const api = {
       shortname: string; fullname: string;
       start_date?: string; end_date?: string;
       professor?: string; category?: string;
+      instance?: string;
     }) => post<CourseVersion>(`/moodle/courses/${id}/import`, body),
     checkBackups:  (id: number)    => get<{ files: MoodleBackupFile[] }>(`/moodle/courses/${id}/backups`),
   },

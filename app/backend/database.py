@@ -43,6 +43,7 @@ def init_db():
             professor   TEXT NOT NULL DEFAULT 'Ricardo Julia',
             category    TEXT NOT NULL DEFAULT '2025 - 2026 Spring Term',
             prompt      TEXT NOT NULL DEFAULT '',
+            instance    TEXT NOT NULL DEFAULT 'Local',
             created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -65,6 +66,15 @@ def init_db():
             filename   TEXT NOT NULL
         );
         """)
+
+    # Migration: add instance column to existing databases
+    with db() as conn:
+        try:
+            conn.execute(
+                "ALTER TABLE courses ADD COLUMN instance TEXT NOT NULL DEFAULT 'Local'"
+            )
+        except Exception:
+            pass  # column already exists
 
     _seed_settings()
 
@@ -107,13 +117,13 @@ def list_courses() -> list[dict]:
     with db() as conn:
         rows = conn.execute("""
             SELECT c.shortname, c.fullname, c.professor, c.category,
-                   c.prompt, c.created_at,
+                   c.prompt, c.instance, c.created_at,
                    COUNT(v.id) AS version_count,
                    MAX(v.version_num) AS latest_version
             FROM courses c
             LEFT JOIN course_versions v ON v.shortname = c.shortname
             GROUP BY c.shortname
-            ORDER BY c.created_at DESC
+            ORDER BY c.instance, c.created_at DESC
         """).fetchall()
     return [dict(r) for r in rows]
 
@@ -127,17 +137,18 @@ def get_course(shortname: str) -> dict | None:
 
 
 def upsert_course(shortname: str, fullname: str, professor: str,
-                  category: str, prompt: str) -> dict:
+                  category: str, prompt: str, instance: str = "Local") -> dict:
     with db() as conn:
         conn.execute("""
-            INSERT INTO courses(shortname, fullname, professor, category, prompt)
-            VALUES(?,?,?,?,?)
+            INSERT INTO courses(shortname, fullname, professor, category, prompt, instance)
+            VALUES(?,?,?,?,?,?)
             ON CONFLICT(shortname) DO UPDATE SET
                 fullname=excluded.fullname,
                 professor=excluded.professor,
                 category=excluded.category,
-                prompt=excluded.prompt
-        """, (shortname, fullname, professor, category, prompt))
+                prompt=excluded.prompt,
+                instance=excluded.instance
+        """, (shortname, fullname, professor, category, prompt, instance))
     return get_course(shortname)
 
 
