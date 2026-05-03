@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / Frontend
+node_modules/
+app/frontend/dist/
+app/frontend/tsconfig.tsbuildinfo
+
+# Built Moodle archives
+app/builds/
+
+# Moodle restore temp dirs
+mbz-imports/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverrides
+
+# Logs
+*.log
+/tmp/moodle_*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Skills / internal
+.sixth/
+
+# Secrets (never commit)
+.env
+.env.local

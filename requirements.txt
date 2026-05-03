@@ -1,0 +1,11 @@
+# Backend API
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+
+# HTTP (used by create_course.py and moodle router)
+requests>=2.31.0
+
+# Static file serving
+aiofiles>=23.2.1
