@@ -1,24 +1,21 @@
 import { useEffect, useState } from 'react'
 import {
-  Stack, Title, Text, Badge, Group, Button, Collapse,
+  Stack, Title, Text, Badge, Group, Button,
   Table, Loader, Alert, ActionIcon, Tooltip, Paper,
-  ThemeIcon, Divider,
+  ThemeIcon, Divider, ScrollArea, Accordion, Box,
 } from '@mantine/core'
 import {
-  IconChevronDown, IconChevronRight, IconDownload,
-  IconBook, IconBuildingArch,
+  IconDownload, IconBook, IconBuildingArch,
   IconRefresh, IconTrash, IconCheck, IconX,
   IconCloud, IconHome,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion } from '../api/client'
 
-// ── Delete confirm ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function DeleteConfirm({ onConfirm, onCancel, loading }: {
-  onConfirm: () => void
-  onCancel: () => void
-  loading: boolean
+  onConfirm: () => void; onCancel: () => void; loading: boolean
 }) {
   return (
     <Group gap={4}>
@@ -32,21 +29,134 @@ function DeleteConfirm({ onConfirm, onCancel, loading }: {
   )
 }
 
-// ── Version row ───────────────────────────────────────────────────────────────
+// ── Module detail panel ───────────────────────────────────────────────────────
 
-function VersionRow({ course, version, onDeleted }: {
-  course: Course
-  version: CourseVersion
-  onDeleted: () => void
-}) {
+interface ModuleProps {
+  mod: { number: number; title: string; objective?: string; key_topics?: string[] }
+  mc?: {
+    lecture_html?: string
+    glossary_terms?: string[]
+    forum_question?: string
+    activities_snapshot?: { id: number; name: string; modname: string }[]
+  }
+}
+
+function ModulePanel({ mod, mc }: ModuleProps) {
+  const glossaryCount = mc?.glossary_terms?.length ?? 0
+  const activities    = mc?.activities_snapshot ?? []
+  const hasLecture    = !!(mc?.lecture_html?.trim())
+
+  return (
+    <Accordion.Item value={String(mod.number)}>
+      <Accordion.Control>
+        <Group justify="space-between" wrap="nowrap" pr="md">
+          <Text size="sm" fw={600} lineClamp={1}>
+            {mod.number}. {mod.title}
+          </Text>
+          <Group gap={4} style={{ flexShrink: 0 }}>
+            {activities.length > 0 && (
+              <Badge size="xs" variant="outline" color="gray">
+                {activities.length} activities
+              </Badge>
+            )}
+            {glossaryCount > 0 && (
+              <Badge size="xs" variant="outline" color="teal">
+                {glossaryCount} terms
+              </Badge>
+            )}
+            {mc?.forum_question && (
+              <Badge size="xs" variant="outline" color="blue">forum</Badge>
+            )}
+            {hasLecture && (
+              <Badge size="xs" variant="outline" color="violet">lecture</Badge>
+            )}
+          </Group>
+        </Group>
+      </Accordion.Control>
+      <Accordion.Panel>
+        <Stack gap="xs">
+          {mod.objective && (
+            <Text size="xs" c="dimmed">{mod.objective}</Text>
+          )}
+          {mod.key_topics && mod.key_topics.length > 0 && (
+            <Group gap={4} wrap="wrap">
+              {mod.key_topics.map(t => (
+                <Badge key={t} size="xs" variant="light" color="gray">{t}</Badge>
+              ))}
+            </Group>
+          )}
+          {activities.length > 0 && (
+            <Table withTableBorder={false} withRowBorders={false}>
+              <Table.Tbody>
+                {activities.map(a => (
+                  <Table.Tr key={a.id}>
+                    <Table.Td w={80}>
+                      <Badge size="xs" variant="outline">{a.modname}</Badge>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="xs">{a.name}</Text>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          )}
+          {mc?.forum_question && (
+            <Text size="xs" c="blue">
+              <strong>Forum: </strong>{mc.forum_question.slice(0, 200)}
+              {mc.forum_question.length > 200 ? '…' : ''}
+            </Text>
+          )}
+        </Stack>
+      </Accordion.Panel>
+    </Accordion.Item>
+  )
+}
+
+// ── Course detail panel ───────────────────────────────────────────────────────
+
+function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
+  const [versions,   setVersions]   = useState<CourseVersion[]>([])
+  const [selVid,     setSelVid]     = useState<number | null>(null)
+  const [content,    setContent]    = useState<Record<string, any> | null>(null)
+  const [loadingV,   setLoadingV]   = useState(false)
   const [building,   setBuilding]   = useState(false)
-  const [confirming, setConfirming] = useState(false)
+  const [confirmDel, setConfirmDel] = useState<number | null>(null)
   const [deleting,   setDeleting]   = useState(false)
+  const [confirmCourse, setConfirmCourse] = useState(false)
+  const [deletingCourse, setDeletingCourse] = useState(false)
+
+  // Load versions when course changes
+  useEffect(() => {
+    setVersions([])
+    setContent(null)
+    setSelVid(null)
+    setLoadingV(true)
+    api.courses.versions(course.shortname)
+      .then(vers => {
+        setVersions(vers)
+        if (vers.length) setSelVid(vers[0].id)
+      })
+      .catch(e => notifications.show({ title: 'Error', message: e.message, color: 'red' }))
+      .finally(() => setLoadingV(false))
+  }, [course.shortname])
+
+  // Load full content when selected version changes
+  useEffect(() => {
+    if (!selVid) return
+    setContent(null)
+    api.courses.version(course.shortname, selVid)
+      .then(v => setContent((v.content as any) ?? {}))
+      .catch(() => setContent({}))
+  }, [selVid, course.shortname])
+
+  const selectedVersion = versions.find(v => v.id === selVid)
 
   const handleBuild = async () => {
+    if (!selVid) return
     setBuilding(true)
     try {
-      const res = await api.courses.build(course.shortname, version.id)
+      const res = await api.courses.build(course.shortname, selVid)
       notifications.show({ title: 'Built', message: `${res.filename} — ${res.size_kb} KB`, color: 'green' })
     } catch (e: any) {
       notifications.show({ title: 'Build failed', message: e.message, color: 'red' })
@@ -55,204 +165,211 @@ function VersionRow({ course, version, onDeleted }: {
     }
   }
 
-  const handleDelete = async () => {
+  const handleDeleteVersion = async () => {
+    if (!confirmDel) return
     setDeleting(true)
     try {
-      await api.courses.deleteVersion(course.shortname, version.id)
-      notifications.show({ title: 'Deleted', message: `v${version.version_num} removed`, color: 'orange' })
-      onDeleted()
+      await api.courses.deleteVersion(course.shortname, confirmDel)
+      const vers = await api.courses.versions(course.shortname)
+      setVersions(vers)
+      setSelVid(vers.length ? vers[0].id : null)
+      if (vers.length === 0) onDeleted()
+      setConfirmDel(null)
     } catch (e: any) {
       notifications.show({ title: 'Delete failed', message: e.message, color: 'red' })
-      setConfirming(false)
     } finally {
       setDeleting(false)
-    }
-  }
-
-  return (
-    <Table.Tr>
-      <Table.Td>
-        <Badge variant="light" color="blue">v{version.version_num}</Badge>
-      </Table.Td>
-      <Table.Td>
-        <Text size="sm" c="dimmed">{version.model_used || '—'}</Text>
-      </Table.Td>
-      <Table.Td>
-        <Text size="sm">{version.start_date || '—'} → {version.end_date || '—'}</Text>
-      </Table.Td>
-      <Table.Td>
-        <Text size="xs" c="dimmed">{new Date(version.created_at).toLocaleDateString()}</Text>
-      </Table.Td>
-      <Table.Td>
-        <Group gap="xs">
-          <Tooltip label="Build .mbz">
-            <ActionIcon variant="light" loading={building} onClick={handleBuild}>
-              <IconBuildingArch size={16} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Download .mbz">
-            <ActionIcon
-              variant="light"
-              color="green"
-              component="a"
-              href={api.courses.downloadUrl(course.shortname, version.id)}
-              download
-            >
-              <IconDownload size={16} />
-            </ActionIcon>
-          </Tooltip>
-          {confirming ? (
-            <DeleteConfirm
-              onConfirm={handleDelete}
-              onCancel={() => setConfirming(false)}
-              loading={deleting}
-            />
-          ) : (
-            <Tooltip label="Delete version">
-              <ActionIcon variant="subtle" color="red" onClick={() => setConfirming(true)}>
-                <IconTrash size={16} />
-              </ActionIcon>
-            </Tooltip>
-          )}
-        </Group>
-      </Table.Td>
-    </Table.Tr>
-  )
-}
-
-// ── Course card ───────────────────────────────────────────────────────────────
-
-function CourseCard({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
-  const [open,       setOpen]       = useState(false)
-  const [versions,   setVersions]   = useState<CourseVersion[]>([])
-  const [loading,    setLoading]    = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const [deleting,   setDeleting]   = useState(false)
-
-  const loadVersions = async () => {
-    if (versions.length && open) { setOpen(false); return }
-    setLoading(true)
-    try {
-      const v = await api.courses.versions(course.shortname)
-      setVersions(v)
-      setOpen(true)
-    } catch (e: any) {
-      notifications.show({ title: 'Error', message: e.message, color: 'red' })
-    } finally {
-      setLoading(false)
     }
   }
 
   const handleDeleteCourse = async () => {
-    setDeleting(true)
+    setDeletingCourse(true)
     try {
       await api.courses.deleteCourse(course.shortname)
-      notifications.show({ title: 'Deleted', message: `${course.shortname} and all versions removed`, color: 'orange' })
       onDeleted()
     } catch (e: any) {
       notifications.show({ title: 'Delete failed', message: e.message, color: 'red' })
-      setConfirming(false)
+      setConfirmCourse(false)
     } finally {
-      setDeleting(false)
+      setDeletingCourse(false)
     }
   }
 
-  const handleVersionDeleted = async () => {
-    const v = await api.courses.versions(course.shortname)
-    setVersions(v)
-    if (v.length === 0) setOpen(false)
-    onDeleted()
-  }
+  const modules  = content?.course_structure?.modules  ?? []
+  const mcList   = content?.module_contents             ?? []
+  const quizQ    = content?.quiz_questions              ?? []
+  const hwSpec   = content?.homework_spec               ?? {}
+  const hwCount  = Object.keys(hwSpec).length
+
+  const mcByNum = Object.fromEntries(
+    (mcList as any[]).map((mc: any) => [mc.module_num, mc])
+  )
 
   return (
-    <Paper withBorder p="md" radius="md">
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap">
-          <ThemeIcon variant="light" size="lg">
-            <IconBook size={18} />
-          </ThemeIcon>
-          <div>
-            <Text fw={600}>{course.fullname}</Text>
-            <Group gap="xs">
+    <Stack gap="sm" pr={4}>
+      {/* Course header */}
+      <Paper withBorder p="md" radius="md">
+        <Group justify="space-between" wrap="nowrap" mb="xs">
+          <Box miw={0}>
+            <Text fw={700} lineClamp={2}>{course.fullname}</Text>
+            <Group gap="xs" mt={2}>
               <Text size="xs" c="dimmed">{course.shortname}</Text>
               {course.professor && <>
                 <Text size="xs" c="dimmed">·</Text>
                 <Text size="xs" c="dimmed">{course.professor}</Text>
               </>}
             </Group>
-          </div>
+          </Box>
+          <Group gap={4} style={{ flexShrink: 0 }}>
+            {confirmCourse ? (
+              <DeleteConfirm
+                onConfirm={handleDeleteCourse}
+                onCancel={() => setConfirmCourse(false)}
+                loading={deletingCourse}
+              />
+            ) : (
+              <Tooltip label="Delete course and all versions">
+                <ActionIcon size="sm" variant="subtle" color="red"
+                            onClick={() => setConfirmCourse(true)}>
+                  <IconTrash size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+          </Group>
         </Group>
+
+        {loadingV && <Loader size="xs" />}
+
+        {/* Version tabs */}
+        {versions.length > 0 && (
+          <>
+            <Divider mb="xs" />
+            <Group gap="xs" justify="space-between" wrap="nowrap">
+              <Group gap={4}>
+                {versions.map(v => (
+                  <Badge
+                    key={v.id}
+                    variant={selVid === v.id ? 'filled' : 'light'}
+                    color="blue"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setSelVid(v.id)}
+                  >
+                    v{v.version_num}
+                    <Text span size="xs" c={selVid === v.id ? 'white' : 'dimmed'} ml={4}>
+                      {v.model_used || 'import'}
+                    </Text>
+                  </Badge>
+                ))}
+              </Group>
+              {selectedVersion && (
+                <Group gap={4} style={{ flexShrink: 0 }}>
+                  <Tooltip label="Build .mbz">
+                    <ActionIcon size="sm" variant="light" loading={building} onClick={handleBuild}>
+                      <IconBuildingArch size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label="Download .mbz">
+                    <ActionIcon
+                      size="sm" variant="light" color="green"
+                      component="a"
+                      href={api.courses.downloadUrl(course.shortname, selectedVersion.id)}
+                      download
+                    >
+                      <IconDownload size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                  {confirmDel === selectedVersion.id ? (
+                    <DeleteConfirm
+                      onConfirm={handleDeleteVersion}
+                      onCancel={() => setConfirmDel(null)}
+                      loading={deleting}
+                    />
+                  ) : (
+                    <Tooltip label="Delete this version">
+                      <ActionIcon size="sm" variant="subtle" color="red"
+                                  onClick={() => setConfirmDel(selectedVersion.id)}>
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                </Group>
+              )}
+            </Group>
+
+            {selectedVersion && (
+              <Group gap="xs" mt="xs">
+                <Text size="xs" c="dimmed">
+                  {selectedVersion.start_date || '—'} → {selectedVersion.end_date || '—'}
+                </Text>
+                <Text size="xs" c="dimmed">·</Text>
+                <Text size="xs" c="dimmed">
+                  Created {new Date(selectedVersion.created_at).toLocaleDateString()}
+                </Text>
+              </Group>
+            )}
+          </>
+        )}
+      </Paper>
+
+      {/* Content stats */}
+      {content && modules.length > 0 && (
         <Group gap="xs">
-          <Badge color="blue" variant="light">
-            {course.version_count} version{course.version_count !== 1 ? 's' : ''}
-          </Badge>
-          <ActionIcon variant="subtle" onClick={loadVersions} loading={loading}>
-            {open ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
-          </ActionIcon>
-          {confirming ? (
-            <DeleteConfirm
-              onConfirm={handleDeleteCourse}
-              onCancel={() => setConfirming(false)}
-              loading={deleting}
-            />
-          ) : (
-            <Tooltip label="Delete course and all versions">
-              <ActionIcon variant="subtle" color="red" onClick={() => setConfirming(true)}>
-                <IconTrash size={18} />
-              </ActionIcon>
-            </Tooltip>
+          <Badge size="sm" variant="light" color="blue">{modules.length} modules</Badge>
+          {quizQ.length > 0 && (
+            <Badge size="sm" variant="light" color="orange">{quizQ.length} quiz questions</Badge>
+          )}
+          {hwCount > 0 && (
+            <Badge size="sm" variant="light" color="grape">{hwCount} homework modules</Badge>
+          )}
+          {content.moodle_import && (
+            <Badge size="sm" variant="light" color="teal">Moodle import</Badge>
+          )}
+          {content.mbz_import && (
+            <Badge size="sm" variant="light" color="violet">.mbz import</Badge>
           )}
         </Group>
-      </Group>
+      )}
 
-      <Collapse in={open}>
-        <Divider my="sm" />
-        {versions.length === 0 ? (
-          <Text size="sm" c="dimmed">No versions yet.</Text>
-        ) : (
-          <Table striped highlightOnHover withTableBorder={false}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Version</Table.Th>
-                <Table.Th>Model</Table.Th>
-                <Table.Th>Dates</Table.Th>
-                <Table.Th>Created</Table.Th>
-                <Table.Th>Actions</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {versions.map(v => (
-                <VersionRow
-                  key={v.id}
-                  course={course}
-                  version={v}
-                  onDeleted={handleVersionDeleted}
-                />
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </Collapse>
-    </Paper>
+      {/* Module accordion */}
+      {content && modules.length > 0 && (
+        <Accordion variant="separated" radius="md">
+          {(modules as any[]).map((mod: any) => (
+            <ModulePanel
+              key={mod.number}
+              mod={mod}
+              mc={mcByNum[mod.number]}
+            />
+          ))}
+        </Accordion>
+      )}
+
+      {content && modules.length === 0 && (
+        <Text size="sm" c="dimmed">No module content stored for this version.</Text>
+      )}
+
+      {!content && selVid && <Loader size="sm" />}
+    </Stack>
   )
 }
 
 // ── Instance group header ─────────────────────────────────────────────────────
 
-function InstanceHeader({ name }: { name: string }) {
-  const isLocal = name === 'Local'
+function InstanceHeader({ name, courses }: { name: string; courses: Course[] }) {
+  const isLocal     = name === 'Local'
+  const totalVers   = courses.reduce((s, c) => s + c.version_count, 0)
+
   return (
-    <Group gap="xs" mt="xs">
-      <ThemeIcon
-        size="sm"
-        variant="light"
-        color={isLocal ? 'gray' : 'blue'}
-      >
+    <Group gap="xs" mt="xs" mb={2}>
+      <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
         {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
       </ThemeIcon>
-      <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}>
-        {name}
-      </Text>
+      <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}>{name}</Text>
+      <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
+        {courses.length} course{courses.length !== 1 ? 's' : ''}
+      </Badge>
+      <Badge size="xs" variant="outline" color="gray">
+        {totalVers} version{totalVers !== 1 ? 's' : ''}
+      </Badge>
     </Group>
   )
 }
@@ -260,20 +377,28 @@ function InstanceHeader({ name }: { name: string }) {
 // ── Library page ──────────────────────────────────────────────────────────────
 
 export default function LibraryPage() {
-  const [courses, setCourses] = useState<Course[]>([])
-  const [loading, setLoading] = useState(true)
+  const [courses,  setCourses]  = useState<Course[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [selected, setSelected] = useState<Course | null>(null)
 
   const load = () => {
     setLoading(true)
     api.courses.list()
-      .then(setCourses)
-      .catch(e => notifications.show({ title: 'Error', message: e.message, color: 'red' }))
-      .finally(() => setLoading(false))
+      .then(c => { setCourses(c); setLoading(false) })
+      .catch(e => {
+        notifications.show({ title: 'Error', message: e.message, color: 'red' })
+        setLoading(false)
+      })
   }
 
   useEffect(load, [])
 
-  // Group by instance; Local always first
+  const handleDeleted = () => {
+    setSelected(null)
+    load()
+  }
+
+  // Group by instance; Local first
   const groups = courses.reduce<Record<string, Course[]>>((acc, c) => {
     const key = c.instance || 'Local'
     if (!acc[key]) acc[key] = []
@@ -287,31 +412,90 @@ export default function LibraryPage() {
     return a.localeCompare(b)
   })
 
+  const PANEL_HEIGHT = 'calc(100vh - 170px)'
+
   return (
-    <Stack>
-      <Group justify="space-between">
+    <Stack gap="sm" style={{ height: PANEL_HEIGHT, display: 'flex', flexDirection: 'column' }}>
+
+      {/* Header */}
+      <Group justify="space-between" style={{ flexShrink: 0 }}>
         <Title order={3}>Course Library</Title>
-        <Button variant="subtle" leftSection={<IconRefresh size={16} />} onClick={load}>
+        <Button variant="subtle" size="xs"
+                leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
+                onClick={load} disabled={loading}>
           Refresh
         </Button>
       </Group>
 
-      {loading && <Loader />}
-
       {!loading && courses.length === 0 && (
         <Alert color="blue" title="No courses yet">
-          Use the <strong>New Course</strong> tab to generate your first course.
+          Use the <strong>New Course</strong> tab to generate your first course,
+          or import from the <strong>Moodle Courses</strong> tab.
         </Alert>
       )}
 
-      {sortedInstances.map(instance => (
-        <Stack key={instance} gap="xs">
-          <InstanceHeader name={instance} />
-          {groups[instance].map(c => (
-            <CourseCard key={c.shortname} course={c} onDeleted={load} />
-          ))}
-        </Stack>
-      ))}
+      {/* Two-panel split */}
+      <Group align="flex-start" wrap="nowrap" style={{ flex: 1, overflow: 'hidden' }} gap="sm">
+
+        {/* Left: course list grouped by instance */}
+        <ScrollArea style={{ width: 280, flexShrink: 0, height: '100%' }} pr={4}>
+          <Stack gap={2}>
+            {loading && <Loader size="sm" />}
+            {sortedInstances.map(instance => (
+              <Box key={instance}>
+                <InstanceHeader name={instance} courses={groups[instance]} />
+                <Stack gap={2}>
+                  {groups[instance].map(c => (
+                    <Paper
+                      key={c.shortname}
+                      withBorder
+                      px="sm"
+                      py={6}
+                      radius="sm"
+                      style={{
+                        cursor: 'pointer',
+                        background: selected?.shortname === c.shortname
+                          ? 'var(--mantine-color-blue-0)'
+                          : undefined,
+                        borderColor: selected?.shortname === c.shortname
+                          ? 'var(--mantine-color-blue-4)'
+                          : undefined,
+                      }}
+                      onClick={() => setSelected(c)}
+                    >
+                      <Group justify="space-between" wrap="nowrap">
+                        <Box style={{ flex: 1, minWidth: 0 }}>
+                          <Text size="xs" fw={500} lineClamp={1}>{c.fullname}</Text>
+                          <Text size="xs" c="dimmed">{c.shortname}</Text>
+                        </Box>
+                        <Badge size="xs" color="blue" variant="light" style={{ flexShrink: 0 }}>
+                          {c.version_count}v
+                        </Badge>
+                      </Group>
+                    </Paper>
+                  ))}
+                </Stack>
+              </Box>
+            ))}
+          </Stack>
+        </ScrollArea>
+
+        {/* Right: course detail */}
+        <ScrollArea style={{ flex: 1, height: '100%' }}>
+          {!selected && !loading && courses.length > 0 && (
+            <Text size="sm" c="dimmed" mt="xl" ta="center">
+              Select a course on the left to view its content.
+            </Text>
+          )}
+          {selected && (
+            <CourseDetail
+              key={selected.shortname}
+              course={selected}
+              onDeleted={handleDeleted}
+            />
+          )}
+        </ScrollArea>
+      </Group>
     </Stack>
   )
 }
