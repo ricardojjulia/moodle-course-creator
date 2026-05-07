@@ -207,6 +207,15 @@ def record_build(version_id: int, filename: str):
         )
 
 
+def update_version_content(version_id: int, content: dict) -> dict | None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE course_versions SET content=? WHERE id=?",
+            (json.dumps(content, ensure_ascii=False), version_id),
+        )
+    return get_version(version_id)
+
+
 def delete_version(version_id: int) -> bool:
     with db() as conn:
         cur = conn.execute(

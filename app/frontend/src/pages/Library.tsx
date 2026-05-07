@@ -1,19 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Stack, Title, Text, Badge, Group, Button,
-  Table, Loader, Alert, ActionIcon, Tooltip, Paper,
-  ThemeIcon, Divider, ScrollArea, Accordion, Box,
-  Modal, TypographyStylesProvider, Checkbox, Collapse,
-  Progress,
+  Loader, Alert, ActionIcon, Tooltip, Paper,
+  ThemeIcon, Divider, Box, Checkbox, Collapse,
+  Progress, ScrollArea, Modal, Select, TextInput, Anchor,
 } from '@mantine/core'
 import {
   IconDownload, IconBuildingArch,
   IconRefresh, IconTrash, IconCheck, IconX,
-  IconCloud, IconHome, IconExternalLink,
-  IconChevronDown, IconChevronRight,
+  IconCloud, IconHome,
+  IconChevronDown, IconChevronRight, IconUpload,
+  IconCloudUpload, IconExternalLink,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion } from '../api/client'
+import { CourseViewer } from '../components/CourseViewer'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -32,213 +33,6 @@ function DeleteConfirm({ onConfirm, onCancel, loading }: {
   )
 }
 
-// ── Activity detail modal ─────────────────────────────────────────────────────
-
-interface ActivitySnap {
-  id: number
-  name: string
-  modname: string
-  content_html?: string
-}
-
-interface ActivityModalProps {
-  activity: ActivitySnap | null
-  moodleCourseId?: number
-  onClose: () => void
-}
-
-function ActivityDetailModal({ activity, moodleCourseId, onClose }: ActivityModalProps) {
-  const [html,    setHtml]    = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [tried,   setTried]   = useState(false)
-
-  useEffect(() => {
-    if (!activity) return
-    setHtml(null)
-    setTried(false)
-    // If content is already stored locally, use it
-    if (activity.content_html?.trim()) {
-      setHtml(activity.content_html)
-      setTried(true)
-    }
-  }, [activity?.id])
-
-  const fetchFromMoodle = async () => {
-    if (!activity || !moodleCourseId) return
-    setLoading(true)
-    try {
-      const res = await api.moodle.moduleContent(moodleCourseId, activity.id)
-      setHtml(res.content_html || '<em>No content available for this activity.</em>')
-    } catch (e: any) {
-      setHtml(`<em>Could not load from Moodle: ${e.message}</em>`)
-    } finally {
-      setLoading(false)
-      setTried(true)
-    }
-  }
-
-  if (!activity) return null
-
-  const modColor: Record<string, string> = {
-    page: 'blue', assign: 'orange', forum: 'teal',
-    quiz: 'red', resource: 'gray', label: 'gray',
-  }
-
-  return (
-    <Modal
-      opened={!!activity}
-      onClose={onClose}
-      title={
-        <Group gap="xs">
-          <Badge color={modColor[activity.modname] ?? 'gray'}>{activity.modname}</Badge>
-          <Text fw={600} size="sm" lineClamp={2}>{activity.name}</Text>
-        </Group>
-      }
-      size="xl"
-      scrollAreaComponent={ScrollArea.Autosize}
-    >
-      {!tried && !loading && (
-        <Stack align="center" py="xl" gap="sm">
-          <Text size="sm" c="dimmed">Content not stored locally.</Text>
-          {moodleCourseId ? (
-            <Button
-              size="sm"
-              variant="light"
-              leftSection={<IconExternalLink size={14} />}
-              onClick={fetchFromMoodle}
-            >
-              Load from Moodle
-            </Button>
-          ) : (
-            <Text size="xs" c="dimmed">No Moodle source available for this version.</Text>
-          )}
-        </Stack>
-      )}
-
-      {loading && (
-        <Stack align="center" py="xl">
-          <Loader />
-          <Text size="sm" c="dimmed">Fetching from Moodle…</Text>
-        </Stack>
-      )}
-
-      {tried && !loading && html && (
-        html.trim().startsWith('<') ? (
-          <TypographyStylesProvider>
-            <div dangerouslySetInnerHTML={{ __html: html }} />
-          </TypographyStylesProvider>
-        ) : (
-          <Text size="sm">{html}</Text>
-        )
-      )}
-    </Modal>
-  )
-}
-
-// ── Module detail panel ───────────────────────────────────────────────────────
-
-interface ModuleProps {
-  mod: { number: number; title: string; objective?: string; key_topics?: string[] }
-  mc?: {
-    lecture_html?: string
-    glossary_terms?: string[]
-    forum_question?: string
-    activities_snapshot?: ActivitySnap[]
-  }
-  moodleCourseId?: number
-}
-
-function ModulePanel({ mod, mc, moodleCourseId }: ModuleProps) {
-  const [activeActivity, setActiveActivity] = useState<ActivitySnap | null>(null)
-
-  const glossaryCount = mc?.glossary_terms?.length ?? 0
-  const activities    = mc?.activities_snapshot ?? []
-  const hasLecture    = !!(mc?.lecture_html?.trim())
-
-  return (
-    <>
-      <Accordion.Item value={String(mod.number)}>
-        <Accordion.Control>
-          <Group justify="space-between" wrap="nowrap" pr="md">
-            <Text size="sm" fw={600} lineClamp={1}>
-              {mod.number}. {mod.title}
-            </Text>
-            <Group gap={4} style={{ flexShrink: 0 }}>
-              {activities.length > 0 && (
-                <Badge size="xs" variant="outline" color="gray">
-                  {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
-                </Badge>
-              )}
-              {glossaryCount > 0 && (
-                <Badge size="xs" variant="outline" color="teal">
-                  {glossaryCount} terms
-                </Badge>
-              )}
-              {mc?.forum_question && (
-                <Badge size="xs" variant="outline" color="blue">forum</Badge>
-              )}
-              {hasLecture && (
-                <Badge size="xs" variant="outline" color="violet">lecture</Badge>
-              )}
-            </Group>
-          </Group>
-        </Accordion.Control>
-        <Accordion.Panel>
-          <Stack gap="xs">
-            {mod.objective && (
-              <Text size="xs" c="dimmed">{mod.objective}</Text>
-            )}
-            {mod.key_topics && mod.key_topics.length > 0 && (
-              <Group gap={4} wrap="wrap">
-                {mod.key_topics.map(t => (
-                  <Badge key={t} size="xs" variant="light" color="gray">{t}</Badge>
-                ))}
-              </Group>
-            )}
-            {activities.length > 0 && (
-              <Table withTableBorder={false} withRowBorders highlightOnHover>
-                <Table.Tbody>
-                  {activities.map(a => (
-                    <Table.Tr
-                      key={a.id}
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setActiveActivity(a)}
-                    >
-                      <Table.Td w={80}>
-                        <Badge size="xs" variant="outline">{a.modname}</Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="xs">{a.name}</Text>
-                      </Table.Td>
-                      <Table.Td w={24}>
-                        <ActionIcon size="xs" variant="subtle" color="blue">
-                          <IconExternalLink size={11} />
-                        </ActionIcon>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            )}
-            {mc?.forum_question && (
-              <Text size="xs" c="blue">
-                <strong>Forum: </strong>{mc.forum_question.slice(0, 200)}
-                {mc.forum_question.length > 200 ? '…' : ''}
-              </Text>
-            )}
-          </Stack>
-        </Accordion.Panel>
-      </Accordion.Item>
-
-      <ActivityDetailModal
-        activity={activeActivity}
-        moodleCourseId={moodleCourseId}
-        onClose={() => setActiveActivity(null)}
-      />
-    </>
-  )
-}
-
 // ── Course detail panel ───────────────────────────────────────────────────────
 
 function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
@@ -251,6 +45,55 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
   const [deleting,   setDeleting]   = useState(false)
   const [confirmCourse, setConfirmCourse] = useState(false)
   const [deletingCourse, setDeletingCourse] = useState(false)
+
+  // Deploy to Moodle
+  const [deployOpen,       setDeployOpen]       = useState(false)
+  const [deploying,        setDeploying]         = useState(false)
+  const [deployResult,     setDeployResult]      = useState<{ moodle_course_id: number; url: string; sections_pushed: number } | null>(null)
+  const [moodleCategories, setMoodleCategories]  = useState<{ value: string; label: string }[]>([])
+  const [deploySn,         setDeploySn]          = useState('')
+  const [deployFn,         setDeployFn]          = useState('')
+  const [deployCatId,      setDeployCatId]       = useState<string | null>(null)
+  const [deployStart,      setDeployStart]       = useState('')
+  const [deployEnd,        setDeployEnd]         = useState('')
+
+  const openDeploy = (v: CourseVersion) => {
+    setDeploySn(course.shortname)
+    setDeployFn(course.fullname)
+    setDeployStart(v.start_date || '')
+    setDeployEnd(v.end_date || '')
+    setDeployResult(null)
+    setDeployCatId(null)
+    api.moodle.categories()
+      .then(cats => setMoodleCategories(cats.map(c => ({ value: String(c.id), label: c.name }))))
+      .catch(() => {})
+    setDeployOpen(true)
+  }
+
+  const handleDeploy = async () => {
+    if (!selVid || !deployCatId) return
+    setDeploying(true)
+    try {
+      const res = await api.moodle.deploy({
+        version_id:  selVid,
+        shortname:   deploySn,
+        fullname:    deployFn,
+        category_id: Number(deployCatId),
+        start_date:  deployStart,
+        end_date:    deployEnd,
+      })
+      setDeployResult(res)
+      notifications.show({
+        title:   'Deployed to Moodle',
+        message: `${deploySn} — ${res.sections_pushed} sections pushed`,
+        color:   'green',
+      })
+    } catch (e: any) {
+      notifications.show({ title: 'Deploy failed', message: e.message, color: 'red' })
+    } finally {
+      setDeploying(false)
+    }
+  }
 
   // Load versions when course changes
   useEffect(() => {
@@ -321,15 +164,10 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
     }
   }
 
-  const modules  = content?.course_structure?.modules  ?? []
-  const mcList   = content?.module_contents             ?? []
-  const quizQ    = content?.quiz_questions              ?? []
-  const hwSpec   = content?.homework_spec               ?? {}
-  const hwCount  = Object.keys(hwSpec).length
-
-  const mcByNum = Object.fromEntries(
-    (mcList as any[]).map((mc: any) => [mc.module_num, mc])
-  )
+  const modules = content?.course_structure?.modules ?? []
+  const quizQ   = content?.quiz_questions            ?? []
+  const hwSpec  = content?.homework_spec             ?? {}
+  const hwCount = Object.keys(hwSpec).length
 
   return (
     <Stack gap="sm" pr={4}>
@@ -404,6 +242,12 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <IconDownload size={14} />
                     </ActionIcon>
                   </Tooltip>
+                  <Tooltip label="Deploy to Moodle">
+                    <ActionIcon size="sm" variant="light" color="blue"
+                                onClick={() => openDeploy(selectedVersion)}>
+                      <IconCloudUpload size={14} />
+                    </ActionIcon>
+                  </Tooltip>
                   {confirmDel === selectedVersion.id ? (
                     <DeleteConfirm
                       onConfirm={handleDeleteVersion}
@@ -457,59 +301,119 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       )}
 
       {/* Module accordion */}
-      {content && modules.length > 0 && (
-        <Accordion variant="separated" radius="md">
-          {(modules as any[]).map((mod: any) => (
-            <ModulePanel
-              key={mod.number}
-              mod={mod}
-              mc={mcByNum[mod.number]}
-              moodleCourseId={content.moodle_course_id}
-            />
-          ))}
-        </Accordion>
-      )}
-
-      {content && modules.length === 0 && (
-        <Text size="sm" c="dimmed">No module content stored for this version.</Text>
+      {content && (
+        <CourseViewer content={content} moodleCourseId={content.moodle_course_id} />
       )}
 
       {!content && selVid && <Loader size="sm" />}
+
+      {/* Deploy to Moodle modal */}
+      <Modal
+        opened={deployOpen}
+        onClose={() => setDeployOpen(false)}
+        title={<Text fw={600} size="sm">Deploy to Moodle — {course.fullname}</Text>}
+        size="md"
+      >
+        {deployResult ? (
+          <Stack gap="sm">
+            <Text size="sm" c="green" fw={500}>
+              Course created successfully — {deployResult.sections_pushed} sections pushed.
+            </Text>
+            <Group gap="xs">
+              <Text size="sm">Moodle course ID: <strong>{deployResult.moodle_course_id}</strong></Text>
+            </Group>
+            <Anchor href={deployResult.url} target="_blank" size="sm">
+              <Group gap={4}>
+                <IconExternalLink size={14} />
+                Open in Moodle
+              </Group>
+            </Anchor>
+            <Group justify="flex-end">
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Close</Button>
+            </Group>
+          </Stack>
+        ) : (
+          <Stack gap="sm">
+            <TextInput
+              label="Shortname"
+              value={deploySn}
+              onChange={e => setDeploySn(e.currentTarget.value)}
+            />
+            <TextInput
+              label="Full name"
+              value={deployFn}
+              onChange={e => setDeployFn(e.currentTarget.value)}
+            />
+            <Select
+              label="Category"
+              placeholder="Select a Moodle category…"
+              data={moodleCategories}
+              value={deployCatId}
+              onChange={setDeployCatId}
+              searchable
+            />
+            <Group grow>
+              <TextInput
+                label="Start date"
+                type="date"
+                value={deployStart}
+                onChange={e => setDeployStart(e.currentTarget.value)}
+              />
+              <TextInput
+                label="End date"
+                type="date"
+                value={deployEnd}
+                onChange={e => setDeployEnd(e.currentTarget.value)}
+              />
+            </Group>
+            <Text size="xs" c="dimmed">
+              This creates a new course in Moodle and pushes section names and lecture content.
+              Enrollments, activities, and quiz questions are not included.
+            </Text>
+            <Group justify="flex-end" gap="xs">
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Cancel</Button>
+              <Button
+                color="blue"
+                leftSection={deploying ? <Loader size="xs" /> : <IconCloudUpload size={14} />}
+                onClick={handleDeploy}
+                disabled={deploying || !deployCatId || !deploySn || !deployFn}
+              >
+                {deploying ? 'Deploying…' : 'Deploy'}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
     </Stack>
   )
 }
 
-// ── Instance group (collapsible, with checkboxes) ─────────────────────────────
+// ── Category group (collapsible, nested under instance) ───────────────────────
 
-interface InstanceGroupProps {
+interface CategoryGroupProps {
   name: string
   courses: Course[]
   selected: Course | null
   checkedShortnames: Set<string>
   onSelect: (c: Course) => void
   onToggle: (shortname: string) => void
-  onToggleAll: (instance: string, checked: boolean) => void
+  onToggleSet: (shortnames: string[], checked: boolean) => void
 }
 
-function InstanceGroup({
+function CategoryGroup({
   name, courses, selected, checkedShortnames,
-  onSelect, onToggle, onToggleAll,
-}: InstanceGroupProps) {
+  onSelect, onToggle, onToggleSet,
+}: CategoryGroupProps) {
   const [open, setOpen] = useState(true)
-  const isLocal       = name === 'Local'
-  const totalVers     = courses.reduce((s, c) => s + c.version_count, 0)
-  const checkedHere   = courses.filter(c => checkedShortnames.has(c.shortname)).length
-  const allChecked    = checkedHere === courses.length
-  const someChecked   = checkedHere > 0 && !allChecked
+  const checkedHere = courses.filter(c => checkedShortnames.has(c.shortname)).length
+  const allChecked  = checkedHere === courses.length
+  const someChecked = checkedHere > 0 && !allChecked
+  const shortnames  = courses.map(c => c.shortname)
 
   return (
     <Box>
-      {/* Instance header row */}
       <Group
-        gap="xs"
-        mt="xs"
-        mb={2}
-        px={4}
+        gap="xs" mt={4} mb={2} px={4} pl={8}
         style={{ cursor: 'pointer', userSelect: 'none' }}
         onClick={() => setOpen(o => !o)}
       >
@@ -518,26 +422,17 @@ function InstanceGroup({
           checked={allChecked}
           indeterminate={someChecked}
           onClick={e => e.stopPropagation()}
-          onChange={e => onToggleAll(name, e.currentTarget.checked)}
+          onChange={e => onToggleSet(shortnames, e.currentTarget.checked)}
         />
-        <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
-          {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
-        </ThemeIcon>
-        <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'} style={{ flex: 1 }}>{name}</Text>
-        <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
-          {courses.length}
-        </Badge>
-        <Badge size="xs" variant="outline" color="gray">
-          {totalVers}v
-        </Badge>
+        <Text size="xs" fw={500} c="dimmed" style={{ flex: 1 }} lineClamp={1}>{name}</Text>
+        <Badge size="xs" variant="dot" color="gray">{courses.length}</Badge>
         <ActionIcon size="xs" variant="subtle" color="gray">
-          {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+          {open ? <IconChevronDown size={10} /> : <IconChevronRight size={10} />}
         </ActionIcon>
       </Group>
 
-      {/* Course list */}
       <Collapse in={open}>
-        <Stack gap={2} pl={4}>
+        <Stack gap={2} pl={12}>
           {courses.map(c => (
             <Group key={c.shortname} gap={4} wrap="nowrap">
               <Checkbox
@@ -547,10 +442,7 @@ function InstanceGroup({
                 onClick={e => e.stopPropagation()}
               />
               <Paper
-                withBorder
-                px="sm"
-                py={6}
-                radius="sm"
+                withBorder px="sm" py={6} radius="sm"
                 style={{
                   cursor: 'pointer', flex: 1,
                   background: selected?.shortname === c.shortname
@@ -578,16 +470,100 @@ function InstanceGroup({
   )
 }
 
+// ── Instance group (collapsible, with category sub-groups) ────────────────────
+
+interface InstanceGroupProps {
+  name: string
+  categories: Record<string, Course[]>
+  selected: Course | null
+  checkedShortnames: Set<string>
+  onSelect: (c: Course) => void
+  onToggle: (shortname: string) => void
+  onToggleSet: (shortnames: string[], checked: boolean) => void
+}
+
+function InstanceGroup({
+  name, categories, selected, checkedShortnames,
+  onSelect, onToggle, onToggleSet,
+}: InstanceGroupProps) {
+  const [open, setOpen] = useState(true)
+  const isLocal      = name === 'Local'
+  const allCourses   = Object.values(categories).flat()
+  const totalVers    = allCourses.reduce((s, c) => s + c.version_count, 0)
+  const checkedHere  = allCourses.filter(c => checkedShortnames.has(c.shortname)).length
+  const allChecked   = checkedHere === allCourses.length && allCourses.length > 0
+  const someChecked  = checkedHere > 0 && !allChecked
+  const allShortnames = allCourses.map(c => c.shortname)
+
+  const sortedCategories = Object.keys(categories).sort((a, b) => {
+    if (a === 'Uncategorized') return 1
+    if (b === 'Uncategorized') return -1
+    return a.localeCompare(b)
+  })
+
+  return (
+    <Box>
+      {/* Instance header row */}
+      <Group
+        gap="xs" mt="xs" mb={2} px={4}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Checkbox
+          size="xs"
+          checked={allChecked}
+          indeterminate={someChecked}
+          onClick={e => e.stopPropagation()}
+          onChange={e => onToggleSet(allShortnames, e.currentTarget.checked)}
+        />
+        <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
+          {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
+        </ThemeIcon>
+        <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'} style={{ flex: 1 }}>{name}</Text>
+        <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
+          {allCourses.length}
+        </Badge>
+        <Badge size="xs" variant="outline" color="gray">
+          {totalVers}v
+        </Badge>
+        <ActionIcon size="xs" variant="subtle" color="gray">
+          {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+        </ActionIcon>
+      </Group>
+
+      {/* Category sub-groups */}
+      <Collapse in={open}>
+        <Stack gap={0}>
+          {sortedCategories.map(cat => (
+            <CategoryGroup
+              key={cat}
+              name={cat}
+              courses={categories[cat]}
+              selected={selected}
+              checkedShortnames={checkedShortnames}
+              onSelect={onSelect}
+              onToggle={onToggle}
+              onToggleSet={onToggleSet}
+            />
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
+  )
+}
+
 // ── Library page ──────────────────────────────────────────────────────────────
 
 export default function LibraryPage() {
-  const [courses,  setCourses]  = useState<Course[]>([])
-  const [loading,  setLoading]  = useState(true)
-  const [selected, setSelected] = useState<Course | null>(null)
-  const [checked,  setChecked]  = useState<Set<string>>(new Set())
-  const [bulking,  setBulking]  = useState(false)
-  const [bulkDone, setBulkDone] = useState(0)
+  const [courses,    setCourses]    = useState<Course[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [selected,   setSelected]   = useState<Course | null>(null)
+  const [checked,    setChecked]    = useState<Set<string>>(new Set())
+  const [bulking,    setBulking]    = useState(false)
+  const [bulkDone,   setBulkDone]   = useState(0)
   const [confirmBulk, setConfirmBulk] = useState(false)
+  const [uploading,  setUploading]  = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
     setLoading(true)
@@ -607,11 +583,10 @@ export default function LibraryPage() {
   const toggleOne = (sn: string) =>
     setChecked(prev => { const n = new Set(prev); n.has(sn) ? n.delete(sn) : n.add(sn); return n })
 
-  const toggleAll = (instance: string, checked: boolean) => {
-    const group = groups[instance] ?? []
+  const toggleSet = (shortnames: string[], on: boolean) => {
     setChecked(prev => {
       const n = new Set(prev)
-      group.forEach(c => checked ? n.add(c.shortname) : n.delete(c.shortname))
+      shortnames.forEach(sn => on ? n.add(sn) : n.delete(sn))
       return n
     })
   }
@@ -638,15 +613,33 @@ export default function LibraryPage() {
     }
   }
 
-  // Group by instance; Local first
-  const groups = courses.reduce<Record<string, Course[]>>((acc, c) => {
-    const key = c.instance || 'Local'
-    if (!acc[key]) acc[key] = []
-    acc[key].push(c)
+  const handleMbzUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setUploading(true)
+    try {
+      const version = await api.courses.uploadMbz(file)
+      notifications.show({ title: 'Imported', message: `${version.shortname} v${version.version_num} added to library`, color: 'green' })
+      load()
+    } catch (err: any) {
+      notifications.show({ title: 'Import failed', message: err.message, color: 'red' })
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // Group by instance → category; Local first
+  const grouped = courses.reduce<Record<string, Record<string, Course[]>>>((acc, c) => {
+    const inst = c.instance || 'Local'
+    const cat  = c.category  || 'Uncategorized'
+    if (!acc[inst]) acc[inst] = {}
+    if (!acc[inst][cat]) acc[inst][cat] = []
+    acc[inst][cat].push(c)
     return acc
   }, {})
 
-  const sortedInstances = Object.keys(groups).sort((a, b) => {
+  const sortedInstances = Object.keys(grouped).sort((a, b) => {
     if (a === 'Local') return -1
     if (b === 'Local') return 1
     return a.localeCompare(b)
@@ -660,11 +653,29 @@ export default function LibraryPage() {
       {/* Header */}
       <Group justify="space-between" style={{ flexShrink: 0 }}>
         <Title order={3}>Course Library</Title>
-        <Button variant="subtle" size="xs"
-                leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
-                onClick={load} disabled={loading}>
-          Refresh
-        </Button>
+        <Group gap="xs">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".mbz"
+            title="Upload a Moodle backup (.mbz) file"
+            hidden
+            onChange={handleMbzUpload}
+          />
+          <Button
+            variant="light" size="xs" color="violet"
+            leftSection={uploading ? <Loader size="xs" /> : <IconUpload size={14} />}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+          >
+            {uploading ? 'Importing…' : 'Upload .mbz'}
+          </Button>
+          <Button variant="subtle" size="xs"
+                  leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
+                  onClick={load} disabled={loading}>
+            Refresh
+          </Button>
+        </Group>
       </Group>
 
       {/* Bulk action bar */}
@@ -724,12 +735,12 @@ export default function LibraryPage() {
               <InstanceGroup
                 key={instance}
                 name={instance}
-                courses={groups[instance]}
+                categories={grouped[instance]}
                 selected={selected}
                 checkedShortnames={checked}
                 onSelect={setSelected}
                 onToggle={toggleOne}
-                onToggleAll={toggleAll}
+                onToggleSet={toggleSet}
               />
             ))}
           </Stack>

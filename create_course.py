@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Moodle Course Creator — Colegio Teológico Biblos
+Moodle Course Administrator — Colegio Teológico Biblos
 Generates a Moodle 5.x .mbz backup from a content prompt using a local LLM.
 
 Usage:
@@ -529,18 +529,20 @@ Incluye exactamente 5 módulos.
 
 
 def generate_module_content(mod_num, mod_title, objective, key_topics,
-                             course_fullname, professor, llm_url, model_id):
+                             course_fullname, professor, llm_url, model_id,
+                             extra_instructions="", custom_prompt=""):
     print(f"  → Module {mod_num}: {mod_title[:55]}…")
-    topics = ", ".join(key_topics)
-    messages = [
-        {"role": "system", "content": SYS_SPANISH_JSON},
-        {"role": "user", "content": f"""
-Genera el contenido académico completo para este módulo de teología.
+    if custom_prompt.strip():
+        user_content = custom_prompt
+    else:
+        topics = ", ".join(key_topics)
+        extra = f"\n\nInstrucciones adicionales:\n{extra_instructions}" if extra_instructions.strip() else ""
+        user_content = f"""Genera el contenido académico completo para este módulo de teología.
 
 Curso: {course_fullname}
 Módulo {mod_num}: {mod_title}
 Objetivo: {objective}
-Temas: {topics}
+Temas: {topics}{extra}
 
 Devuelve EXACTAMENTE este JSON:
 {{
@@ -556,8 +558,10 @@ Devuelve EXACTAMENTE este JSON:
   "discussion_question": "Pregunta de discusión reflexiva relacionada con el módulo"
 }}
 
-Incluye exactamente 10 términos en glossary y entre 5 y 7 secciones.
-"""},
+Incluye exactamente 10 términos en glossary y entre 5 y 7 secciones."""
+    messages = [
+        {"role": "system", "content": SYS_SPANISH_JSON},
+        {"role": "user", "content": user_content},
     ]
     raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=6000)
     return extract_json(raw)
@@ -2067,7 +2071,7 @@ def build_mbz(config, content):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Moodle Course Creator — generates a .mbz from an AI prompt',
+        description='Moodle Course Administrator — generates a .mbz from an AI prompt',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

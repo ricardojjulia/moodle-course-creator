@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { AppShell, Tabs, Title, Group, Text, Badge } from '@mantine/core'
+import { useState, useCallback } from 'react'
+import { AppShell, Tabs, Title, Group, Text, Loader, Badge, Box } from '@mantine/core'
 import {
-  IconBooks, IconPlus, IconCloud, IconSettings,
+  IconBooks, IconWand, IconCloud, IconSettings,
 } from '@tabler/icons-react'
 import LibraryPage     from './pages/Library'
 import NewCoursePage   from './pages/NewCourse'
@@ -11,7 +11,17 @@ import SettingsPage    from './pages/Settings'
 type Tab = 'library' | 'new' | 'moodle' | 'settings'
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('library')
+  const [tab, setTab]                 = useState<Tab>('library')
+  const [generating, setGenerating]   = useState(false)
+  const [genLabel, setGenLabel]       = useState<string>('')
+
+  const handleGeneratingChange = useCallback((v: boolean, label?: string) => {
+    setGenerating(v)
+    if (label) setGenLabel(label)
+    else if (!v) setGenLabel('')
+  }, [])
+
+  const handleCreated = useCallback(() => setTab('library'), [])
 
   return (
     <AppShell header={{ height: 56 }} padding="md">
@@ -19,7 +29,7 @@ export default function App() {
         <Group gap="xs">
           <IconBooks size={24} color="#1c7ed6" />
           <div>
-            <Title order={5} style={{ lineHeight: 1 }}>Moodle Course Creator</Title>
+            <Title order={5} style={{ lineHeight: 1 }}>Moodle Course Administrator</Title>
             <Text size="xs" c="dimmed" style={{ lineHeight: 1 }}>Colegio Teológico Biblos</Text>
           </div>
         </Group>
@@ -31,11 +41,18 @@ export default function App() {
             <Tabs.Tab value="library"  leftSection={<IconBooks size={16} />}>
               Library
             </Tabs.Tab>
-            <Tabs.Tab value="new"      leftSection={<IconPlus size={16} />}>
-              New Course
+            <Tabs.Tab value="new" leftSection={generating ? <Loader size={14} /> : <IconWand size={16} />}>
+              <Group gap={6} wrap="nowrap">
+                Course Studio
+                {generating && (
+                  <Badge size="xs" color="blue" variant="filled">
+                    {genLabel || 'generating…'}
+                  </Badge>
+                )}
+              </Group>
             </Tabs.Tab>
             <Tabs.Tab value="moodle"   leftSection={<IconCloud size={16} />}>
-              Moodle Courses
+              Instance Course Catalog
             </Tabs.Tab>
             <Tabs.Tab value="settings" leftSection={<IconSettings size={16} />}>
               Settings
@@ -44,7 +61,15 @@ export default function App() {
         </Tabs>
 
         {tab === 'library'  && <LibraryPage />}
-        {tab === 'new'      && <NewCoursePage onCreated={() => setTab('library')} />}
+
+        {/* Always mounted so generation survives tab switches */}
+        <Box display={tab === 'new' ? 'block' : 'none'}>
+          <NewCoursePage
+            onCreated={handleCreated}
+            onGeneratingChange={handleGeneratingChange}
+          />
+        </Box>
+
         {tab === 'moodle'   && <MoodlePage />}
         {tab === 'settings' && <SettingsPage />}
       </AppShell.Main>

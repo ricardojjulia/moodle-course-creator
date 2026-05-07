@@ -3,17 +3,21 @@ import {
   Stack, Title, Text, Badge, Group, Button, Select,
   Paper, Loader, Alert, Table, ActionIcon,
   Tooltip, Modal, Textarea, ScrollArea, Divider,
-  ThemeIcon, Checkbox, Progress, Box,
+  ThemeIcon, Checkbox, Progress, Box, Collapse,
+  SegmentedControl,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
   IconRefresh, IconCloud, IconCheck, IconX,
   IconSend, IconLock, IconLockOpen, IconDownload,
-  IconDatabaseImport, IconArchive, IconSquareCheck,
+  IconDatabaseImport, IconArchive,
+  IconChevronDown, IconChevronRight,
+  IconReportAnalytics,
 } from '@tabler/icons-react'
 import {
   api, type MoodleCourse, type MoodleSection,
   type MoodleActivity, type CourseVersion, type MoodleBackupFile,
+  type GradeReport, type GradeColumn, type GradeCell,
 } from '../api/client'
 
 const ts2date = (ts: number) => ts ? new Date(ts * 1000).toISOString().slice(0, 10) : ''
@@ -161,6 +165,175 @@ function SectionPanel({ section, courseId, versions }: SectionPanelProps) {
   )
 }
 
+// ── Grades panel ─────────────────────────────────────────────────────────────
+
+function gradeColor(pct: number | null): string {
+  if (pct === null) return 'gray'
+  if (pct >= 90)   return 'green'
+  if (pct >= 70)   return 'blue'
+  if (pct >= 50)   return 'yellow'
+  return 'red'
+}
+
+function GradesPanel({ courseId }: { courseId: number }) {
+  const [report,  setReport]  = useState<GradeReport | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    api.moodle.grades(courseId)
+      .then(setReport)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [courseId])
+
+  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">Loading grades…</Text></Stack>
+  if (error)   return <Alert color="red" title="Could not load grades">{error}</Alert>
+  if (!report || report.rows.length === 0)
+    return <Text size="sm" c="dimmed" ta="center" py="xl">No grade data available for this course.</Text>
+
+  const nonTotal = report.columns.filter(c => !c.is_total)
+  const total    = report.columns.find(c => c.is_total)
+
+  const CellBadge = ({ cell }: { cell: GradeCell }) => (
+    <Badge
+      size="sm"
+      variant={cell.raw === null ? 'outline' : 'light'}
+      color={gradeColor(cell.percentage)}
+      style={{ minWidth: 60, fontWeight: 500 }}
+    >
+      {cell.formatted === '-' ? '—' : cell.formatted}
+    </Badge>
+  )
+
+  return (
+    <ScrollArea>
+      <Table withTableBorder withColumnBorders highlightOnHover style={{ minWidth: 600 }}>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th style={{ minWidth: 160, position: 'sticky', left: 0, background: 'var(--mantine-color-body)', zIndex: 1 }}>
+              Student
+            </Table.Th>
+            {nonTotal.map(col => (
+              <Table.Th key={col.id} style={{ minWidth: 110, textAlign: 'center' }}>
+                <Text size="xs" fw={600} lineClamp={2}>{col.name}</Text>
+                {col.module && <Badge size="xs" variant="dot" color="gray">{col.module}</Badge>}
+              </Table.Th>
+            ))}
+            {total && (
+              <Table.Th style={{ minWidth: 110, textAlign: 'center', background: 'var(--mantine-color-gray-0)' }}>
+                <Text size="xs" fw={700}>Total</Text>
+              </Table.Th>
+            )}
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {report.rows.map(row => {
+            const nonTotalCells = row.cells.slice(0, nonTotal.length)
+            const totalCell     = total ? row.cells[nonTotal.length] : null
+            return (
+              <Table.Tr key={row.userid}>
+                <Table.Td style={{ position: 'sticky', left: 0, background: 'var(--mantine-color-body)', zIndex: 1 }}>
+                  <Text size="xs" fw={500}>{row.fullname}</Text>
+                </Table.Td>
+                {nonTotalCells.map((cell, i) => (
+                  <Table.Td key={i} style={{ textAlign: 'center' }}>
+                    <CellBadge cell={cell} />
+                  </Table.Td>
+                ))}
+                {totalCell && (
+                  <Table.Td style={{ textAlign: 'center', background: 'var(--mantine-color-gray-0)' }}>
+                    <CellBadge cell={totalCell} />
+                  </Table.Td>
+                )}
+              </Table.Tr>
+            )
+          })}
+        </Table.Tbody>
+      </Table>
+    </ScrollArea>
+  )
+}
+
+// ── Category group in the left panel ─────────────────────────────────────────
+
+interface MoodleCategoryGroupProps {
+  name: string
+  courses: MoodleCourse[]
+  selected: MoodleCourse | null
+  checkedIds: Set<number>
+  onSelect: (c: MoodleCourse) => void
+  onToggleId: (id: number) => void
+  onToggleSet: (ids: number[], on: boolean) => void
+}
+
+function MoodleCategoryGroup({
+  name, courses, selected, checkedIds,
+  onSelect, onToggleId, onToggleSet,
+}: MoodleCategoryGroupProps) {
+  const [open, setOpen] = useState(false)
+  const checkedHere = courses.filter(c => checkedIds.has(c.id)).length
+  const allChecked  = checkedHere === courses.length && courses.length > 0
+  const someChecked = checkedHere > 0 && !allChecked
+  const ids = courses.map(c => c.id)
+
+  return (
+    <Box>
+      <Group
+        gap="xs" mt={4} mb={2} px={4} pl={8}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Checkbox
+          size="xs"
+          checked={allChecked}
+          indeterminate={someChecked}
+          onClick={e => e.stopPropagation()}
+          onChange={e => onToggleSet(ids, e.currentTarget.checked)}
+        />
+        <Text size="xs" fw={500} c="dimmed" style={{ flex: 1 }} lineClamp={1}>{name}</Text>
+        <Badge size="xs" variant="dot" color="gray">{courses.length}</Badge>
+        <ActionIcon size="xs" variant="subtle" color="gray">
+          {open ? <IconChevronDown size={10} /> : <IconChevronRight size={10} />}
+        </ActionIcon>
+      </Group>
+
+      <Collapse in={open}>
+        <Stack gap={2} pl={12}>
+          {courses.map(c => (
+            <Group key={c.id} gap={4} wrap="nowrap">
+              <Checkbox
+                size="xs"
+                checked={checkedIds.has(c.id)}
+                onChange={() => onToggleId(c.id)}
+                onClick={e => e.stopPropagation()}
+              />
+              <Paper
+                withBorder px="sm" py={6} radius="sm"
+                style={{
+                  cursor: 'pointer', flex: 1,
+                  background: selected?.id === c.id
+                    ? 'var(--mantine-color-blue-0)' : undefined,
+                  borderColor: selected?.id === c.id
+                    ? 'var(--mantine-color-blue-4)' : undefined,
+                }}
+                onClick={() => onSelect(c)}
+              >
+                <Box miw={0}>
+                  <Text size="xs" fw={500} lineClamp={2}>{c.fullname}</Text>
+                  <Text size="xs" c="dimmed">{c.shortname}</Text>
+                </Box>
+              </Paper>
+            </Group>
+          ))}
+        </Stack>
+      </Collapse>
+    </Box>
+  )
+}
+
 // ── Batch import status types ─────────────────────────────────────────────────
 
 type BatchStatus = 'pending' | 'running' | 'done' | 'error'
@@ -190,6 +363,10 @@ export default function MoodleCoursesPage() {
   const [checkedIds, setCheckedIds]     = useState<Set<number>>(new Set())
   const [batchItems, setBatchItems]     = useState<BatchItem[]>([])
   const [batching, setBatching]         = useState(false)
+  const [instanceOpen, setInstanceOpen] = useState(true)
+
+  // Detail view mode
+  const [viewMode, setViewMode]         = useState<'structure' | 'grades'>('structure')
 
   const loadCourses = () => {
     setLoading(true)
@@ -209,6 +386,7 @@ export default function MoodleCoursesPage() {
     setSelected(c)
     setSections([])
     setBackupFiles(null)
+    setViewMode('structure')
     setLoadingSec(true)
     try {
       const [secs, libCourses] = await Promise.all([
@@ -240,6 +418,7 @@ export default function MoodleCoursesPage() {
         start_date: ts2date(selected.startdate),
         end_date:   ts2date(selected.enddate),
         instance:   siteName || 'Moodle',
+        category:   selected.category_name,
       })
       notifications.show({
         title: 'Imported!',
@@ -301,11 +480,18 @@ export default function MoodleCoursesPage() {
 
   // ── Batch import ────────────────────────────────────────────────────────────
 
-  const toggleCheck = (id: number, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const toggleCheck = (id: number) => {
     setCheckedIds(prev => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleSet = (ids: number[], on: boolean) => {
+    setCheckedIds(prev => {
+      const next = new Set(prev)
+      ids.forEach(id => on ? next.add(id) : next.delete(id))
       return next
     })
   }
@@ -317,6 +503,20 @@ export default function MoodleCoursesPage() {
       setCheckedIds(new Set(courses.map(c => c.id)))
     }
   }
+
+  // Group by category for left-panel hierarchy
+  const catGroups = courses.reduce<Record<string, MoodleCourse[]>>((acc, c) => {
+    const cat = c.category_name || 'Uncategorized'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(c)
+    return acc
+  }, {})
+
+  const sortedCats = Object.keys(catGroups).sort((a, b) => {
+    if (a === 'Uncategorized') return 1
+    if (b === 'Uncategorized') return -1
+    return a.localeCompare(b)
+  })
 
   const runBatchImport = async () => {
     const selected_courses = courses.filter(c => checkedIds.has(c.id))
@@ -336,6 +536,7 @@ export default function MoodleCoursesPage() {
           start_date: ts2date(item.course.startdate),
           end_date:   ts2date(item.course.enddate),
           instance:   siteName || 'Moodle',
+          category:   item.course.category_name,
         })
         setBatchItems(prev => prev.map((it, idx) =>
           idx === i ? { ...it, status: 'done' } : it
@@ -367,7 +568,7 @@ export default function MoodleCoursesPage() {
       {/* ── Header ────────────────────────────────────────────────────── */}
       <Group justify="space-between" wrap="nowrap" style={{ flexShrink: 0 }}>
         <div>
-          <Title order={3}>Moodle Courses</Title>
+          <Title order={3}>Instance Course Catalog</Title>
           {siteName && (
             <Group gap={6} mt={2}>
               <ThemeIcon size="xs" color="blue" variant="light">
@@ -443,51 +644,57 @@ export default function MoodleCoursesPage() {
       {/* ── Two-panel split ───────────────────────────────────────────── */}
       <Group align="flex-start" wrap="nowrap" style={{ flex: 1, overflow: 'hidden' }} gap="sm">
 
-        {/* Left: scrollable course list with checkboxes */}
-        <ScrollArea style={{ width: 280, flexShrink: 0, height: '100%' }} pr={4}>
-          <Stack gap="xs">
+        {/* Left: instance → category → course hierarchy */}
+        <ScrollArea style={{ width: 300, flexShrink: 0, height: '100%' }} pr={4}>
+          <Stack gap={2}>
             {loading && <Loader size="sm" />}
-            {courses.length > 1 && !loading && (
-              <Group gap="xs" px={4}>
-                <Checkbox
-                  size="xs"
-                  checked={checkedIds.size === courses.length}
-                  indeterminate={checkedIds.size > 0 && checkedIds.size < courses.length}
-                  onChange={toggleAll}
-                  label={<Text size="xs" c="dimmed">Select all</Text>}
-                />
-              </Group>
-            )}
-            {courses.map(c => (
-              <Paper
-                key={c.id}
-                withBorder p="sm" radius="md"
-                style={{
-                  cursor: 'pointer',
-                  background: selected?.id === c.id
-                    ? 'var(--mantine-color-blue-0)'
-                    : undefined,
-                  borderColor: selected?.id === c.id
-                    ? 'var(--mantine-color-blue-4)'
-                    : undefined,
-                }}
-                onClick={() => selectCourse(c)}
-              >
-                <Group gap="xs" wrap="nowrap" align="flex-start">
+
+            {!loading && courses.length > 0 && (
+              <Box>
+                {/* Instance header */}
+                <Group
+                  gap="xs" mt="xs" mb={2} px={4}
+                  style={{ cursor: 'pointer', userSelect: 'none' }}
+                  onClick={() => setInstanceOpen(o => !o)}
+                >
                   <Checkbox
                     size="xs"
-                    checked={checkedIds.has(c.id)}
-                    onChange={() => {}}
-                    onClick={e => toggleCheck(c.id, e)}
-                    style={{ marginTop: 2 }}
+                    checked={checkedIds.size === courses.length && courses.length > 0}
+                    indeterminate={checkedIds.size > 0 && checkedIds.size < courses.length}
+                    onClick={e => e.stopPropagation()}
+                    onChange={toggleAll}
                   />
-                  <Box style={{ flex: 1, minWidth: 0 }}>
-                    <Text size="sm" fw={500} lineClamp={2}>{c.fullname}</Text>
-                    <Text size="xs" c="dimmed">{c.shortname}</Text>
-                  </Box>
+                  <ThemeIcon size="sm" variant="light" color="blue">
+                    <IconCloud size={12} />
+                  </ThemeIcon>
+                  <Text fw={600} size="sm" c="blue" style={{ flex: 1 }} lineClamp={1}>
+                    {siteName || 'Moodle'}
+                  </Text>
+                  <Badge size="xs" variant="outline" color="blue">{courses.length}</Badge>
+                  <ActionIcon size="xs" variant="subtle" color="gray">
+                    {instanceOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                  </ActionIcon>
                 </Group>
-              </Paper>
-            ))}
+
+                {/* Category groups */}
+                <Collapse in={instanceOpen}>
+                  <Stack gap={0}>
+                    {sortedCats.map(cat => (
+                      <MoodleCategoryGroup
+                        key={cat}
+                        name={cat}
+                        courses={catGroups[cat]}
+                        selected={selected}
+                        checkedIds={checkedIds}
+                        onSelect={selectCourse}
+                        onToggleId={toggleCheck}
+                        onToggleSet={toggleSet}
+                      />
+                    ))}
+                  </Stack>
+                </Collapse>
+              </Box>
+            )}
           </Stack>
         </ScrollArea>
 
@@ -588,24 +795,42 @@ export default function MoodleCoursesPage() {
                 )}
               </Paper>
 
-              {/* Legend */}
-              <Alert color="blue" icon={<IconCloud size={14} />} py="xs">
-                <Group gap="xs">
-                  {capBadge(true)} can be updated via API &nbsp;·&nbsp;
-                  {capBadge(false)} requires .mbz restore
-                </Group>
-              </Alert>
+              {/* View toggle */}
+              <SegmentedControl
+                size="xs"
+                value={viewMode}
+                onChange={v => setViewMode(v as 'structure' | 'grades')}
+                data={[
+                  { value: 'structure', label: 'Structure' },
+                  { value: 'grades',    label: <Group gap={4}><IconReportAnalytics size={13} />Grades</Group> },
+                ]}
+              />
 
-              {/* Sections */}
-              {loadingSec && <Loader />}
-              {sections.map(sec => (
-                <SectionPanel
-                  key={sec.id}
-                  section={sec}
-                  courseId={selected.id}
-                  versions={libVersions}
-                />
-              ))}
+              {/* Structure view */}
+              {viewMode === 'structure' && (
+                <>
+                  <Alert color="blue" icon={<IconCloud size={14} />} py="xs">
+                    <Group gap="xs">
+                      {capBadge(true)} can be updated via API &nbsp;·&nbsp;
+                      {capBadge(false)} requires .mbz restore
+                    </Group>
+                  </Alert>
+                  {loadingSec && <Loader />}
+                  {sections.map(sec => (
+                    <SectionPanel
+                      key={sec.id}
+                      section={sec}
+                      courseId={selected.id}
+                      versions={libVersions}
+                    />
+                  ))}
+                </>
+              )}
+
+              {/* Grades view */}
+              {viewMode === 'grades' && (
+                <GradesPanel courseId={selected.id} />
+              )}
             </Stack>
           )}
         </ScrollArea>

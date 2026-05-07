@@ -4,7 +4,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -22,7 +22,10 @@ class EvaluateIn(BaseModel):
 @router.get("/models")
 def list_models(llm_url: str = ""):
     url = llm_url or get_settings().get("llm_url", cc.DEFAULT_LLM_URL)
-    models = cc._fetch_models(url)
+    try:
+        models = cc._fetch_models(url)
+    except Exception as e:
+        raise HTTPException(503, f"Cannot reach LLM server at {url} — {e}")
     result = []
     for m in models:
         specs = cc._infer_specs(m)
@@ -52,7 +55,10 @@ def get_evaluation_cache():
 def evaluate_models(body: EvaluateIn):
     """Run the 90-second theology test against all available models and cache results."""
     url = body.llm_url or get_settings().get("llm_url", cc.DEFAULT_LLM_URL)
-    models = cc._fetch_models(url)
+    try:
+        models = cc._fetch_models(url)
+    except Exception as e:
+        raise HTTPException(503, f"Cannot reach LLM server at {url} — is it running?")
     results = []
     for model_id in models:
         specs  = cc._infer_specs(model_id)

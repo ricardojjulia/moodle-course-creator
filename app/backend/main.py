@@ -9,7 +9,7 @@ from pathlib import Path
 from .database import init_db
 from .routers import courses, llm, moodle, settings
 
-app = FastAPI(title="Moodle Course Creator API", version="1.0.0")
+app = FastAPI(title="Moodle Course Administrator API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
