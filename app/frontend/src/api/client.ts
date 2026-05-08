@@ -149,6 +149,37 @@ export interface MoodleBackupFile {
   download_url: string
 }
 
+export interface InstanceStats {
+  total_courses: number
+  total_categories: number
+  avg_versions: number | null
+  last_activity_at: string | null
+  v1_count: number
+  v2_count: number
+  v3plus_count: number
+}
+
+export interface ReviewCheckItem {
+  label:  string
+  status: 'Passed' | 'Needs Revision' | 'Missing'
+  note:   string
+}
+
+export interface ReviewSection {
+  title: string
+  items: ReviewCheckItem[]
+}
+
+export interface CourseReviewResult {
+  shortname:   string
+  version_num: number | null
+  overall:     'Passed' | 'Needs Revision' | 'Incomplete'
+  score:       number
+  summary:     string
+  sections:    ReviewSection[]
+  error?:      string   // set by frontend when request fails
+}
+
 export interface EvaluationCache {
   results:      LlmModel[]
   evaluated_at: string | null
@@ -160,6 +191,7 @@ export interface AppSettings {
   moodle_token: string
   moodle_token_masked: string
   llm_url: string
+  llm_api_key_masked: string
   last_model: string
   active_instance: string
 }
@@ -177,6 +209,8 @@ export const api = {
   settings: {
     get:              ()                    => get<AppSettings>('/settings'),
     save:             (s: Partial<AppSettings>) => put<AppSettings>('/settings', s),
+    saveLlm:          (llm_url: string, llm_api_key: string) =>
+                        put<AppSettings>('/settings', { llm_url, llm_api_key }),
     listInstances:    ()                    => get<MoodleInstance[]>('/settings/instances'),
     saveInstance:     (b: { name: string; url: string; token: string }) =>
                         post<{ ok: boolean; updated: boolean }>('/settings/instances', b),
@@ -217,6 +251,14 @@ export const api = {
                      del<{ deleted: number }>(`/courses/${sn}/versions/${vid}`),
     bulkDelete:    (shortnames: string[]) =>
                      post<{ deleted: string[]; not_found: string[] }>('/courses/bulk-delete', { shortnames }),
+    stats:         (instance: string)    =>
+                     get<InstanceStats>(`/courses/stats?instance=${encodeURIComponent(instance)}`),
+    review: (sn: string, body: { agent_context: string; model_id: string }) =>
+              post<CourseReviewResult>(`/courses/${encodeURIComponent(sn)}/review`, body),
+    applyReview: (sn: string, body: { reviews: CourseReviewResult[]; model_id: string }) =>
+              post<CourseVersion>(`/courses/${encodeURIComponent(sn)}/regenerate-from-review`, body),
+    finalizeReview: (sn: string, vid: number, body: { reviews: CourseReviewResult[]; model_id: string }) =>
+              post<CourseVersion>(`/courses/${encodeURIComponent(sn)}/versions/${vid}/finalize-review`, body),
   },
 
   // ── LLM ───────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ class SettingsIn(BaseModel):
     moodle_url:   str = ""
     moodle_token: str = ""
     llm_url:      str = ""
+    llm_api_key:  str = ""
     last_model:   str = ""
 
 
@@ -51,6 +52,9 @@ def read_settings():
     token = s.get("moodle_token", "")
     s["moodle_token_masked"] = _mask(token)
     s["active_instance"] = s.get("active_instance", "")
+    api_key = s.get("llm_api_key", "")
+    s["llm_api_key_masked"] = _mask(api_key) if api_key else ""
+    s.pop("llm_api_key", None)   # never send the raw key to the frontend
     return s
 
 

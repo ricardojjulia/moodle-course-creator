@@ -278,8 +278,8 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
                 <Table.Tbody>
                   {activities.map((a, i) => (
                     <Table.Tr key={`${a.id}-${i}`}
-                              style={{ cursor: a.content_html ? 'pointer' : 'default' }}
-                              onClick={() => a.content_html ? setActiveActivity(a) : undefined}>
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => setActiveActivity(a)}>
                       <Table.Td w={80}><Badge size="xs" variant="outline">{a.modname}</Badge></Table.Td>
                       <Table.Td>
                         <Text size="xs">
@@ -287,11 +287,9 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
                         </Text>
                       </Table.Td>
                       <Table.Td w={24}>
-                        {a.content_html && (
-                          <ActionIcon size="xs" variant="subtle" color="blue">
-                            <IconExternalLink size={11} />
-                          </ActionIcon>
-                        )}
+                        <ActionIcon size="xs" variant="subtle" color={a.content_html ? 'blue' : 'gray'}>
+                          <IconExternalLink size={11} />
+                        </ActionIcon>
                       </Table.Td>
                     </Table.Tr>
                   ))}

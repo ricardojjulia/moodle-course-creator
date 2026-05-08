@@ -12,9 +12,26 @@ import {
   IconPlayerPlay, IconPlus, IconBook, IconCategory,
   IconUsers, IconUserCheck, IconUserOff, IconUserX,
   IconEyeOff, IconShield, IconDeviceMobile,
-  IconApi, IconRefresh, IconSchool,
+  IconApi, IconRefresh, IconSchool, IconRobot,
+  IconBrain, IconServer, IconExternalLink,
 } from '@tabler/icons-react'
 import { api, type AppSettings, type MoodleInstance, type MoodleStats } from '../api/client'
+
+// ── LLM provider presets ──────────────────────────────────────────────────────
+
+const LLM_PROVIDERS = [
+  { id: 'local',      label: 'Local LLM',  url: '',                              needsKey: false, icon: <IconServer  size={14} />, color: 'gray'   },
+  { id: 'openai',     label: 'OpenAI',     url: 'https://api.openai.com/v1',     needsKey: true,  icon: <IconBrain   size={14} />, color: 'green'  },
+  { id: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api/v1',  needsKey: true,  icon: <IconRobot   size={14} />, color: 'violet' },
+  { id: 'anthropic',  label: 'Claude',     url: 'https://api.anthropic.com/v1',  needsKey: true,  icon: <IconBrain   size={14} />, color: 'orange' },
+  { id: 'custom',     label: 'Custom',     url: '',                              needsKey: true,  icon: <IconApi     size={14} />, color: 'blue'   },
+] as const
+
+const PROVIDER_MODELS: Record<string, string[]> = {
+  openai:     ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'gpt-4-turbo'],
+  openrouter: ['anthropic/claude-opus-4-7', 'anthropic/claude-sonnet-4-6', 'openai/gpt-4o', 'google/gemini-2.5-pro', 'meta-llama/llama-3.3-70b-instruct'],
+  anthropic:  ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+}
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
@@ -239,6 +256,11 @@ export default function SettingsPage() {
   const [stats, setStats]           = useState<MoodleStats | null>(null)
   const [loadingStats, setLoadingStats] = useState(false)
 
+  const [llmProvider, setLlmProvider]   = useState<string>('local')
+  const [llmApiKey,   setLlmApiKey]     = useState('')
+  const [llmKeyMask,  setLlmKeyMask]    = useState('')
+  const [savingLlm,   setSavingLlm]     = useState(false)
+
   const form = useForm({
     initialValues: { moodle_url: '', moodle_token: '', llm_url: '' },
   })
@@ -261,12 +283,16 @@ export default function SettingsPage() {
       api.settings.listInstances().catch(() => [] as MoodleInstance[]),
     ])
     form.setValues({ moodle_url: s.moodle_url, moodle_token: '', llm_url: s.llm_url })
+    setLlmKeyMask(s.llm_api_key_masked || '')
+    // Detect provider from saved URL
+    const savedUrl = s.llm_url || ''
+    const matched = LLM_PROVIDERS.find(p => p.id !== 'local' && p.id !== 'custom' && p.url && savedUrl.startsWith(p.url))
+    if (matched) setLlmProvider(matched.id)
+    else if (!savedUrl || savedUrl.includes('192.168') || savedUrl.includes('localhost') || savedUrl.includes('127.0')) setLlmProvider('local')
+    else setLlmProvider('custom')
     setInstances(insts)
     setLoading(false)
-    // Load stats if there is an active connection
-    if (s.active_instance || s.moodle_url) {
-      loadStats()
-    }
+    if (s.active_instance || s.moodle_url) loadStats()
   }
 
   useEffect(() => { loadAll() }, [])
@@ -356,14 +382,26 @@ export default function SettingsPage() {
     }
   }
 
-  // ── Save LLM URL ────────────────────────────────────────────────────────────
+  // ── Save LLM settings ───────────────────────────────────────────────────────
   const saveLlm = async () => {
+    setSavingLlm(true)
     try {
-      await api.settings.save({ llm_url: form.values.llm_url } as any)
-      notifications.show({ title: 'Saved', message: 'LLM server URL updated.', color: 'green' })
+      await api.settings.saveLlm(form.values.llm_url, llmApiKey)
+      if (llmApiKey) setLlmKeyMask('••••' + llmApiKey.slice(-4))
+      setLlmApiKey('')
+      notifications.show({ title: 'Saved', message: 'LLM settings updated.', color: 'green' })
     } catch (e: any) {
       notifications.show({ title: 'Error', message: e.message, color: 'red' })
+    } finally {
+      setSavingLlm(false)
     }
+  }
+
+  const selectProvider = (id: string) => {
+    setLlmProvider(id)
+    const p = LLM_PROVIDERS.find(p => p.id === id)
+    if (p && p.url) form.setFieldValue('llm_url', p.url)
+    else if (id === 'local') form.setFieldValue('llm_url', 'http://192.168.86.41:1234/v1')
   }
 
   if (loading) return <Loader />
@@ -503,22 +541,95 @@ export default function SettingsPage() {
           </Stack>
         </Paper>
 
-        {/* ── LLM Server ────────────────────────────────────────────────── */}
+        {/* ── LLM Provider ──────────────────────────────────────────────── */}
         <Paper withBorder p="md" radius="md">
-          <Title order={5} mb="sm">LLM Server</Title>
+          <Title order={5} mb="xs">LLM Provider</Title>
+          <Text size="xs" c="dimmed" mb="sm">
+            Select a provider or use your local LLM server.
+          </Text>
+
+          {/* Provider preset buttons */}
+          <Group gap="xs" mb="sm" wrap="wrap">
+            {LLM_PROVIDERS.map(p => (
+              <Button
+                key={p.id}
+                size="xs"
+                variant={llmProvider === p.id ? 'filled' : 'light'}
+                color={p.color}
+                leftSection={p.icon}
+                onClick={() => selectProvider(p.id)}
+              >
+                {p.label}
+              </Button>
+            ))}
+          </Group>
+
           <Stack gap="sm">
             <TextInput
-              label="Server URL"
+              label="API Endpoint URL"
               placeholder="http://192.168.86.41:1234/v1"
               {...form.getInputProps('llm_url')}
             />
+
+            {llmProvider !== 'local' && (
+              <PasswordInput
+                label="API Key"
+                placeholder={llmKeyMask || 'Enter API key…'}
+                description={
+                  llmProvider === 'openrouter'
+                    ? 'Get a free key at openrouter.ai — supports Claude, GPT, Gemini & more'
+                    : llmProvider === 'openai'
+                    ? 'platform.openai.com → API keys'
+                    : llmProvider === 'anthropic'
+                    ? 'console.anthropic.com → API keys'
+                    : 'Your provider API key'
+                }
+                value={llmApiKey}
+                onChange={e => setLlmApiKey(e.currentTarget.value)}
+                rightSection={
+                  llmKeyMask ? (
+                    <Tooltip label="Key saved">
+                      <ThemeIcon size="xs" color="green" variant="subtle">
+                        <IconCheck size={10} />
+                      </ThemeIcon>
+                    </Tooltip>
+                  ) : null
+                }
+              />
+            )}
+
+            {/* Suggested models for selected provider */}
+            {PROVIDER_MODELS[llmProvider] && (
+              <Box>
+                <Text size="xs" c="dimmed" mb={4}>Suggested model IDs for this provider:</Text>
+                <Group gap={4} wrap="wrap">
+                  {PROVIDER_MODELS[llmProvider].map(m => (
+                    <Badge key={m} size="xs" variant="outline" color="gray"
+                           style={{ cursor: 'default', fontFamily: 'monospace' }}>
+                      {m}
+                    </Badge>
+                  ))}
+                </Group>
+              </Box>
+            )}
+
+            {llmProvider === 'openrouter' && (
+              <Alert color="violet" py="xs" icon={<IconExternalLink size={14} />}>
+                <Text size="xs">
+                  OpenRouter gives one key access to Claude, GPT-4o, Gemini, Llama and 100+ models.
+                  Free tier available.
+                </Text>
+              </Alert>
+            )}
+
             <Group>
               <Button
                 variant="light"
-                leftSection={<IconCheck size={16} />}
+                leftSection={savingLlm ? <Loader size="xs" /> : <IconCheck size={16} />}
                 onClick={saveLlm}
+                disabled={savingLlm}
               >
-                Save
+                Save LLM Settings
               </Button>
             </Group>
           </Stack>

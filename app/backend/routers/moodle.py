@@ -24,7 +24,7 @@ def _moodle_call(function: str, params: dict = None, settings: dict = None) -> d
         **(params or {}),
     }
     try:
-        resp = requests.post(url, data=payload, timeout=15)
+        resp = requests.post(url, data=payload, timeout=30)
         resp.raise_for_status()
     except requests.RequestException as e:
         raise HTTPException(502, f"Moodle unreachable: {e}")
@@ -191,46 +191,52 @@ class MoodleImportIn(BaseModel):
 def import_course_to_library(course_id: int, body: MoodleImportIn):
     """Snapshot a live Moodle course's section structure into the local library."""
     import re
-    sections_raw = _moodle_call("core_course_get_contents", {"courseid": course_id})
 
-    real_sections = [s for s in sections_raw if s.get("section", 0) != 0]
+    # Fetch section structure — fall back to metadata-only if Moodle times out
+    # or returns an error (hidden courses, rate-limiting, etc.)
     modules = []
     module_contents = []
+    contents_warning = None
+    try:
+        sections_raw = _moodle_call("core_course_get_contents", {"courseid": course_id})
+        real_sections = [s for s in sections_raw if s.get("section", 0) != 0]
 
-    for i, sec in enumerate(real_sections[:5], start=1):
-        summary = sec.get("summary") or ""
-        plain = re.sub(r"<[^>]+>", "", summary).strip()
+        for i, sec in enumerate(real_sections[:5], start=1):
+            summary = sec.get("summary") or ""
+            plain = re.sub(r"<[^>]+>", "", summary).strip()
 
-        activities = []
-        for m in sec.get("modules", []):
-            # Capture inline content for pages / assignments
-            content_html = ""
-            for c in m.get("contents", []):
-                if c.get("type") == "content":
-                    content_html = c.get("content", "")
-                    break
-            if not content_html:
-                content_html = m.get("description", "") or ""
-            activities.append({
-                "id":           m.get("id"),
-                "name":         m.get("name"),
-                "modname":      m.get("modname"),
-                "content_html": content_html,
+            activities = []
+            for m in sec.get("modules", []):
+                content_html = ""
+                for c in m.get("contents", []):
+                    if c.get("type") == "content":
+                        content_html = c.get("content", "")
+                        break
+                if not content_html:
+                    content_html = m.get("description", "") or ""
+                activities.append({
+                    "id":           m.get("id"),
+                    "name":         m.get("name"),
+                    "modname":      m.get("modname"),
+                    "content_html": content_html,
+                })
+
+            modules.append({
+                "number": i,
+                "title": sec.get("name") or f"Module {i}",
+                "objective": plain[:300],
+                "key_topics": [],
             })
-
-        modules.append({
-            "number": i,
-            "title": sec.get("name") or f"Module {i}",
-            "objective": plain[:300],
-            "key_topics": [],
-        })
-        module_contents.append({
-            "module_num": i,
-            "lecture_html": summary,
-            "glossary_terms": [],
-            "forum_question": "",
-            "activities_snapshot": activities,
-        })
+            module_contents.append({
+                "module_num": i,
+                "lecture_html": summary,
+                "glossary_terms": [],
+                "forum_question": "",
+                "activities_snapshot": activities,
+            })
+    except Exception as e:
+        # Save metadata-only version rather than failing the whole import
+        contents_warning = str(e)
 
     content = {
         "course_structure":  {"course_summary": "", "modules": modules},
@@ -241,6 +247,7 @@ def import_course_to_library(course_id: int, body: MoodleImportIn):
         "homework_spec":     {},
         "moodle_import":     True,
         "moodle_course_id":  course_id,
+        **({"contents_warning": contents_warning} if contents_warning else {}),
     }
 
     professor = body.professor or get_settings().get("professor", "")

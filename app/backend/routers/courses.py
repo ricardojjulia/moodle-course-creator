@@ -1,5 +1,6 @@
 """Course library CRUD + .mbz build endpoints."""
 
+import json
 import re
 import sys
 import tarfile
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 import create_course as cc
 
 from ..database import (
+    db as _db,
     list_courses, get_course, upsert_course,
     list_versions, get_version, save_version, update_version_content,
     record_build, get_settings, delete_course, delete_version,
@@ -303,6 +305,426 @@ def _parse_mbz(mbz_bytes: bytes) -> dict:
     }
 
 
+# ── Instance stats ────────────────────────────────────────────────────────────
+
+@router.get("/stats")
+def get_instance_stats(instance: str = "Local"):
+    """Aggregate stats for all courses belonging to an instance."""
+    with _db() as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(DISTINCT c.shortname)  AS total_courses,
+                COUNT(DISTINCT c.category)   AS total_categories
+            FROM courses c
+            WHERE c.instance = ?
+        """, (instance,)).fetchone()
+
+        total_courses     = row["total_courses"]    if row else 0
+        total_categories  = row["total_categories"] if row else 0
+
+        # Avg versions per course
+        avg_row = conn.execute("""
+            SELECT AVG(vc) AS avg_versions
+            FROM (
+                SELECT COUNT(v.id) AS vc
+                FROM courses c
+                LEFT JOIN course_versions v ON v.shortname = c.shortname
+                WHERE c.instance = ?
+                GROUP BY c.shortname
+            ) sub
+        """, (instance,)).fetchone()
+
+        avg_versions = round(avg_row["avg_versions"], 1) if avg_row and avg_row["avg_versions"] is not None else None
+
+        # Last activity: most recent version added for this instance
+        last_row = conn.execute("""
+            SELECT MAX(v.created_at) AS last_at
+            FROM course_versions v
+            JOIN courses c ON c.shortname = v.shortname
+            WHERE c.instance = ?
+        """, (instance,)).fetchone()
+
+        last_activity_at = last_row["last_at"] if last_row else None
+
+        # Version distribution: count courses by number of versions
+        vdist_row = conn.execute("""
+            SELECT
+                SUM(CASE WHEN vc = 1 THEN 1 ELSE 0 END) AS v1_count,
+                SUM(CASE WHEN vc = 2 THEN 1 ELSE 0 END) AS v2_count,
+                SUM(CASE WHEN vc >= 3 THEN 1 ELSE 0 END) AS v3plus_count
+            FROM (
+                SELECT c.shortname, COUNT(v.id) AS vc
+                FROM courses c
+                LEFT JOIN course_versions v ON v.shortname = c.shortname
+                WHERE c.instance = ?
+                GROUP BY c.shortname
+            ) sub
+        """, (instance,)).fetchone()
+
+        v1_count     = int(vdist_row["v1_count"]     or 0) if vdist_row else 0
+        v2_count     = int(vdist_row["v2_count"]     or 0) if vdist_row else 0
+        v3plus_count = int(vdist_row["v3plus_count"] or 0) if vdist_row else 0
+
+    return {
+        "total_courses":    total_courses,
+        "total_categories": total_categories,
+        "avg_versions":     avg_versions,
+        "last_activity_at": last_activity_at,
+        "v1_count":         v1_count,
+        "v2_count":         v2_count,
+        "v3plus_count":     v3plus_count,
+    }
+
+
+# ── Autonomous review ─────────────────────────────────────────────────────────
+
+_JSON_OUTPUT_INSTRUCTION = """
+
+---
+RESPONSE FORMAT: Reply with ONLY a valid JSON object — no markdown fences, no prose before or after.
+Required structure:
+{
+  "overall": "Passed" | "Needs Revision" | "Incomplete",
+  "score": <integer 0-100>,
+  "summary": "<2-3 sentence overall assessment>",
+  "sections": [
+    {
+      "title": "<category from your review criteria>",
+      "items": [
+        {
+          "label": "<specific check>",
+          "status": "Passed" | "Needs Revision" | "Missing",
+          "note": "<one sentence explanation>"
+        }
+      ]
+    }
+  ]
+}"""
+
+
+def _strip_html(text: str) -> str:
+    return re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', text)).strip()
+
+
+def _format_for_review(shortname: str, ver: dict) -> str:
+    """Render course content as structured plain text for LLM review."""
+    content = ver.get("content", {}) if isinstance(ver.get("content"), dict) else {}
+    structure = content.get("course_structure", {})
+    modules   = structure.get("modules", [])
+    mcs       = content.get("module_contents", [])
+
+    lines = [
+        f"COURSE SHORTNAME: {shortname}",
+        f"TITLE: {structure.get('course_title', shortname)}",
+        f"OBJECTIVE: {structure.get('course_objective', '—')}",
+        f"VERSION: v{ver.get('version_num', '?')} | MODEL: {ver.get('model_used', '—')}",
+        "",
+    ]
+
+    # Syllabus
+    syllabus = content.get("syllabus")
+    if syllabus:
+        lines.append("=== SYLLABUS ===")
+        if isinstance(syllabus, dict):
+            for k, v in list(syllabus.items())[:8]:
+                lines.append(f"  {k}: {str(v)[:250]}")
+        else:
+            lines.append(str(syllabus)[:800])
+        lines.append("")
+
+    # Modules
+    for mod in modules:
+        num   = mod.get("number") or mod.get("module_num", "?")
+        title = mod.get("title", f"Module {num}")
+        lines.append(f"=== MODULE {num}: {title} ===")
+        lines.append(f"  Objective : {mod.get('objective', '—')}")
+        lines.append(f"  Key Topics: {', '.join(mod.get('key_topics', []))}")
+
+        mc = next((m for m in mcs if m.get("module_num") == num), None)
+        if mc:
+            lecture = mc.get("lecture_html", "")
+            if lecture:
+                clean = _strip_html(lecture)
+                lines.append(f"  Lecture excerpt: {clean[:500]}")
+
+            q = mc.get("discussion_question") or mc.get("forum_question", "")
+            if q:
+                lines.append(f"  Discussion question: {q}")
+
+            glossary = mc.get("glossary") or mc.get("glossary_terms", [])
+            if glossary:
+                lines.append(f"  Glossary terms: {len(glossary)}")
+
+            # Activities snapshot (Moodle imports)
+            acts = mc.get("activities_snapshot", [])
+            if acts:
+                lines.append(f"  Activities: {', '.join(a.get('modname','?') + ':' + a.get('name','') for a in acts[:6])}")
+        lines.append("")
+
+    # Quiz
+    quiz = content.get("quiz_questions", [])
+    lines.append(f"=== ASSESSMENT ===")
+    lines.append(f"  Quiz questions: {len(quiz)}")
+    if quiz:
+        sample = "; ".join(str(q.get("question", q))[:80] for q in quiz[:3])
+        lines.append(f"  Sample: {sample}")
+
+    # Homework
+    hw = content.get("homework_spec", {})
+    lines.append(f"  Homework modules: {len(hw)} ({', '.join(f'Mod {k}:{v}' for k, v in hw.items())})")
+
+    return "\n".join(lines)
+
+
+def _extract_json_block(text: str) -> str:
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    return m.group(0) if m else ""
+
+
+@router.post("/{shortname}/review")
+def review_course(shortname: str, body: dict):
+    """Run an autonomous LLM audit on the latest version of a course."""
+    agent_context = (body.get("agent_context") or "").strip()
+    model_id      = (body.get("model_id")      or "").strip()
+
+    if not agent_context:
+        raise HTTPException(400, detail="agent_context is required and cannot be empty")
+
+    vers = list_versions(shortname)
+    if not vers:
+        raise HTTPException(404, detail=f"No versions found for '{shortname}'")
+
+    ver = get_version(vers[0]["id"])
+    if not ver:
+        raise HTTPException(404, detail="Version record not found")
+
+    course_text = _format_for_review(shortname, ver)
+
+    settings = get_settings()
+    llm_url  = settings.get("llm_url", "")
+    api_key  = settings.get("llm_api_key", "")
+
+    if not llm_url:
+        raise HTTPException(400, detail="LLM URL not configured — visit Settings.")
+
+    system_msg = agent_context + _JSON_OUTPUT_INSTRUCTION
+    messages   = [
+        {"role": "system", "content": system_msg},
+        {"role": "user",   "content": f"Audit this course:\n\n{course_text}"},
+    ]
+
+    try:
+        raw = cc.call_llm(
+            messages, llm_url,
+            model_id=model_id or "local-model",
+            temperature=0.2, max_tokens=2048,
+            api_key=api_key,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(502, detail=str(exc))
+
+    result = None
+    for candidate in [raw, _extract_json_block(raw)]:
+        if not candidate:
+            continue
+        try:
+            result = json.loads(candidate)
+            break
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if result is None:
+        raise HTTPException(500, detail=f"LLM returned non-JSON: {raw[:300]}")
+
+    return {
+        "shortname":   shortname,
+        "version_num": ver.get("version_num"),
+        **result,
+    }
+
+
+# ── Regenerate course from review feedback ────────────────────────────────────
+
+@router.post("/{shortname}/regenerate-from-review")
+def regenerate_from_review(shortname: str, body: dict):
+    """Fork the latest version and regenerate all modules using review findings as improvement instructions."""
+    reviews  = body.get("reviews", [])
+    model_id = (body.get("model_id") or "").strip()
+
+    if not reviews:
+        raise HTTPException(400, "reviews list is required")
+
+    vers = list_versions(shortname)
+    if not vers:
+        raise HTTPException(404, f"No versions found for '{shortname}'")
+
+    ver = get_version(vers[0]["id"])
+    if not ver:
+        raise HTTPException(404, "Version record not found")
+
+    # ── Collect all failing/missing items from every review ───────────────────
+    failing_items = []
+    for review in reviews:
+        agent_label = review.get("agent_label") or "Reviewer"
+        for section in review.get("sections", []):
+            section_title = section.get("title", "")
+            for item in section.get("items", []):
+                if item.get("status") in ("Needs Revision", "Missing"):
+                    label = item.get("label", "")
+                    note  = item.get("note", "")
+                    failing_items.append(
+                        f"[{agent_label} · {section_title}] {label}: {note}"
+                    )
+
+    if not failing_items:
+        raise HTTPException(400, "No revision items found in the reviews — all checks passed")
+
+    review_instructions = (
+        "Apply ALL of the following improvements identified by expert reviewers:\n\n"
+        + "\n".join(f"- {item}" for item in failing_items)
+        + "\n\n"
+        "Ensure every revision item above is directly addressed in the content you produce. "
+        "Where content is flagged as Missing, add it in full. "
+        "Where content Needs Revision, rewrite it to meet the standard described. "
+        "Maintain the existing course structure and module titles."
+    )
+
+    # ── Fork the current version ──────────────────────────────────────────────
+    new_rec = save_version(
+        shortname,
+        model_id or "reviewed",
+        ver["start_date"], ver["end_date"],
+        ver["content"],
+    )
+    new_vid = new_rec["id"]
+    new_ver = get_version(new_vid)
+    content = new_ver["content"]
+
+    settings  = get_settings()
+    llm_url   = settings.get("llm_url", cc.DEFAULT_LLM_URL)
+    api_key   = settings.get("llm_api_key", "")
+    course    = get_course(shortname)
+    professor = (course or {}).get("professor", "")
+    fullname  = (course or {}).get("fullname", shortname)
+    eff_model = model_id or ver["model_used"]
+    # Imported courses have non-LLM model_used values — fall back to last_model
+    if eff_model in NON_REGENERABLE or not eff_model:
+        eff_model = settings.get("last_model") or "local-model"
+
+    modules = content.get("course_structure", {}).get("modules", [])
+    mc_list = content.get("module_contents", [])
+
+    # ── Regenerate every module with improvement instructions ─────────────────
+    # For imported courses include the existing lecture as context so the LLM
+    # can improve the actual content rather than generating from titles alone.
+    for mod in modules:
+        existing_mc = next(
+            (m for m in mc_list if m.get("module_num") == mod["number"]), None
+        )
+        existing_text = ""
+        if existing_mc:
+            existing_text = _strip_html(existing_mc.get("lecture_html", ""))[:1200]
+
+        mod_instructions = review_instructions
+        if existing_text:
+            mod_instructions = (
+                "EXISTING MODULE CONTENT (use this as your starting point and improve it):\n"
+                f"{existing_text}\n\n"
+                + review_instructions
+            )
+
+        raw_mc = cc.generate_module_content(
+            mod["number"], mod["title"], mod["objective"],
+            mod.get("key_topics", []), fullname, professor,
+            llm_url, eff_model,
+            extra_instructions=mod_instructions,
+            api_key=api_key,
+        )
+        normalized = {
+            **raw_mc,
+            "module_num":     mod["number"],
+            "lecture_html":   cc.sections_to_html(raw_mc.get("sections", [])),
+            "glossary_terms": [g.get("term", "") for g in raw_mc.get("glossary", [])],
+            "forum_question": raw_mc.get("discussion_question", ""),
+        }
+        replaced = False
+        for i, item in enumerate(mc_list):
+            if item.get("module_num") == mod["number"]:
+                mc_list[i] = normalized
+                replaced = True
+                break
+        if not replaced:
+            mc_list.append(normalized)
+
+    content["module_contents"] = mc_list
+
+    # ── Regenerate quiz if flagged or under-count ──────────────────────────────
+    quiz_flagged = any(
+        item.get("status") in ("Needs Revision", "Missing")
+        and ("quiz" in (item.get("label", "") + item.get("note", "")).lower()
+             or "question" in (item.get("label", "") + item.get("note", "")).lower())
+        for review in reviews
+        for section in review.get("sections", [])
+        for item in section.get("items", [])
+    )
+    if quiz_flagged or len(content.get("quiz_questions", [])) < 30:
+        content["quiz_questions"] = cc.generate_quiz_questions(
+            fullname, modules, 40, llm_url, eff_model, api_key=api_key)
+
+    # ── Regenerate syllabus to reflect improvements ───────────────────────────
+    content["syllabus"] = cc.generate_syllabus(
+        fullname, shortname, professor,
+        modules, llm_url, eff_model, api_key=api_key)
+
+    update_version_content(new_vid, content)
+    return get_version(new_vid)
+
+
+# ── Finalize review: quiz + syllabus only (frontend drives module steps) ──────
+
+@router.post("/{shortname}/versions/{version_id}/finalize-review")
+def finalize_review(shortname: str, version_id: int, body: dict):
+    """Regenerate quiz (if flagged or < 30 q's) and syllabus. Called after all modules are done."""
+    reviews  = body.get("reviews", [])
+    model_id = (body.get("model_id") or "").strip()
+
+    v = get_version(version_id)
+    if not v or v["shortname"] != shortname:
+        raise HTTPException(404, "Version not found")
+
+    settings  = get_settings()
+    llm_url   = settings.get("llm_url", cc.DEFAULT_LLM_URL)
+    api_key   = settings.get("llm_api_key", "")
+    course    = get_course(shortname)
+    professor = (course or {}).get("professor", "")
+    fullname  = (course or {}).get("fullname", shortname)
+    eff_model = model_id or v["model_used"]
+    if eff_model in NON_REGENERABLE or not eff_model:
+        eff_model = settings.get("last_model") or "local-model"
+
+    content = v["content"]
+    modules = content.get("course_structure", {}).get("modules", [])
+
+    quiz_flagged = any(
+        item.get("status") in ("Needs Revision", "Missing")
+        and ("quiz" in (item.get("label", "") + item.get("note", "")).lower()
+             or "question" in (item.get("label", "") + item.get("note", "")).lower())
+        for review in reviews
+        for section in review.get("sections", [])
+        for item in section.get("items", [])
+    )
+    if quiz_flagged or len(content.get("quiz_questions", [])) < 30:
+        content["quiz_questions"] = cc.generate_quiz_questions(
+            fullname, modules, 40, llm_url, eff_model, api_key=api_key)
+
+    content["syllabus"] = cc.generate_syllabus(
+        fullname, shortname, professor,
+        modules, llm_url, eff_model, api_key=api_key)
+
+    update_version_content(version_id, content)
+    return get_version(version_id)
+
+
 # ── Courses ───────────────────────────────────────────────────────────────────
 
 @router.get("")
@@ -554,6 +976,7 @@ def regenerate_module(shortname: str, version_id: int, module_num: int,
 
     settings  = get_settings()
     llm_url   = settings.get("llm_url", cc.DEFAULT_LLM_URL)
+    api_key   = settings.get("llm_api_key", "")
     professor = (course or {}).get("professor", "")
     fullname  = (course or {}).get("fullname", shortname)
 
@@ -565,6 +988,7 @@ def regenerate_module(shortname: str, version_id: int, module_num: int,
         llm_url, model_id,
         extra_instructions=b.instructions,
         custom_prompt=b.custom_prompt,
+        api_key=api_key,
     )
     normalized = {
         **raw_mc,
@@ -612,6 +1036,7 @@ def generate_course(body: GenerateIn):
     """Run full LLM pipeline and store result as a new version."""
     settings = get_settings()
     llm_url  = settings.get("llm_url", cc.DEFAULT_LLM_URL)
+    api_key  = settings.get("llm_api_key", "")
 
     from datetime import datetime, timedelta
     start_dt = (datetime.strptime(body.start_date, "%Y-%m-%d")
@@ -621,7 +1046,7 @@ def generate_course(body: GenerateIn):
 
     # Step 1 — course structure
     course_structure = cc.generate_course_structure(
-        body.shortname, body.fullname, body.prompt, llm_url, body.model_id)
+        body.shortname, body.fullname, body.prompt, llm_url, body.model_id, api_key=api_key)
     modules = course_structure["modules"]
 
     # Step 2 — module content
@@ -630,7 +1055,7 @@ def generate_course(body: GenerateIn):
         mc = cc.generate_module_content(
             m["number"], m["title"], m["objective"],
             m.get("key_topics", []), body.fullname, body.professor,
-            llm_url, body.model_id)
+            llm_url, body.model_id, api_key=api_key)
         # Normalise to the same shape as .mbz imports so the UI viewer works
         module_contents.append({
             **mc,
@@ -643,18 +1068,18 @@ def generate_course(body: GenerateIn):
     # Step 3 — syllabus
     syllabus = cc.generate_syllabus(
         body.fullname, body.shortname, body.professor,
-        modules, llm_url, body.model_id)
+        modules, llm_url, body.model_id, api_key=api_key)
 
     # Step 4 — quiz questions
     quiz_questions = cc.generate_quiz_questions(
-        body.fullname, modules, body.num_questions, llm_url, body.model_id)
+        body.fullname, modules, body.num_questions, llm_url, body.model_id, api_key=api_key)
 
     # Step 5 — homework prompts (if requested)
     hw_spec = {int(k): v for k, v in body.homework_spec.items()}
     homework_prompts = {}
     if hw_spec:
         homework_prompts = cc.generate_homework_prompts(
-            body.fullname, modules, hw_spec, llm_url, body.model_id)
+            body.fullname, modules, hw_spec, llm_url, body.model_id, api_key=api_key)
 
     content = {
         "course_structure":  course_structure,

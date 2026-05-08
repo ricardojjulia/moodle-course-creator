@@ -84,6 +84,7 @@ def _seed_settings():
         "moodle_url":   "https://biblos.moodlecloud.com",
         "moodle_token": "",
         "llm_url":      "http://192.168.86.41:1234/v1",
+        "llm_api_key":  "",
         "last_model":   "",
     }
     with db() as conn:

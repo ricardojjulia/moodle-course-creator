@@ -1,22 +1,36 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Stack, Title, Text, Badge, Group, Button,
   Loader, Alert, ActionIcon, Tooltip, Paper,
   ThemeIcon, Divider, Box, Checkbox, Collapse,
   Progress, ScrollArea, Modal, Select, TextInput, Anchor,
+  SimpleGrid, RingProgress, Center,
 } from '@mantine/core'
 import {
   IconDownload, IconBuildingArch,
-  IconRefresh, IconTrash, IconCheck, IconX,
+  IconRefresh, IconTrash, IconCheck, IconX, IconMagnet,
   IconCloud, IconHome,
   IconChevronDown, IconChevronRight, IconUpload,
   IconCloudUpload, IconExternalLink,
+  IconBook2, IconCategory, IconClock, IconGitBranch,
+  IconStack, IconSearch,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
-import { api, type Course, type CourseVersion } from '../api/client'
+import { api, type Course, type CourseVersion, type InstanceStats } from '../api/client'
 import { CourseViewer } from '../components/CourseViewer'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function relativeTime(iso: string): string {
+  const diff  = Date.now() - new Date(iso).getTime()
+  const mins  = Math.floor(diff / 60_000)
+  const hours = Math.floor(diff / 3_600_000)
+  const days  = Math.floor(diff / 86_400_000)
+  if (mins  < 1)   return 'just now'
+  if (mins  < 60)  return `${mins}m ago`
+  if (hours < 24)  return `${hours}h ago`
+  return `${days}d ago`
+}
 
 function DeleteConfirm({ onConfirm, onCancel, loading }: {
   onConfirm: () => void; onCancel: () => void; loading: boolean
@@ -470,6 +484,170 @@ function CategoryGroup({
   )
 }
 
+// ── Instance dashboard modal ──────────────────────────────────────────────────
+
+function StatCard({ icon, label, value, color, sub }: {
+  icon: React.ReactNode
+  label: string
+  value: React.ReactNode
+  color: string
+  sub?: string
+}) {
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group gap="sm" wrap="nowrap" align="flex-start">
+        <ThemeIcon size="lg" variant="light" color={color} style={{ flexShrink: 0 }}>
+          {icon}
+        </ThemeIcon>
+        <Box>
+          <Text size="xs" c="dimmed" fw={500} tt="uppercase" lts={0.5}>{label}</Text>
+          <Text fw={700} size="xl" lh={1.2}>{value}</Text>
+          {sub && <Text size="xs" c="dimmed" mt={2}>{sub}</Text>}
+        </Box>
+      </Group>
+    </Paper>
+  )
+}
+
+function InstanceDashboard({ instanceName, opened, onClose }: {
+  instanceName: string
+  opened: boolean
+  onClose: () => void
+}) {
+  const [stats,   setStats]   = useState<InstanceStats | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const fetchStats = () => {
+    setStats(null)
+    setLoading(true)
+    api.courses.stats(instanceName)
+      .then(setStats)
+      .catch(e => notifications.show({ title: 'Stats error', message: e.message, color: 'red' }))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    if (!opened) return
+    fetchStats()
+  }, [opened, instanceName])
+
+  const isLocal = instanceName === 'Local'
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={
+        <Group gap="xs">
+          <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
+            {isLocal ? <IconHome size={14} /> : <IconCloud size={14} />}
+          </ThemeIcon>
+          <Text fw={600} size="sm">{instanceName} — Course Evaluator</Text>
+          <Tooltip label="Refresh stats">
+            <ActionIcon size="xs" variant="subtle" color="gray" loading={loading} onClick={fetchStats}>
+              <IconRefresh size={12} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      }
+      size="lg"
+    >
+      {loading && (
+        <Center py="xl"><Loader size="sm" /></Center>
+      )}
+
+      {stats && !loading && (
+        <Stack gap="md">
+          <SimpleGrid cols={2} spacing="sm">
+            <StatCard
+              icon={<IconBook2 size={16} />}
+              label="Total Courses"
+              value={stats.total_courses}
+              color="blue"
+            />
+            <StatCard
+              icon={<IconCategory size={16} />}
+              label="Total Categories"
+              value={stats.total_categories}
+              color="teal"
+            />
+            <StatCard
+              icon={<IconGitBranch size={16} />}
+              label="Avg Versions / Course"
+              value={stats.avg_versions !== null ? stats.avg_versions.toFixed(1) : '—'}
+              color="violet"
+              sub={stats.avg_versions !== null
+                ? stats.avg_versions >= 2 ? 'actively iterated' : 'mostly first drafts'
+                : 'no versions yet'}
+            />
+            <StatCard
+              icon={<IconClock size={16} />}
+              label="Last Activity"
+              value={stats.last_activity_at ? relativeTime(stats.last_activity_at) : '—'}
+              color="orange"
+              sub={stats.last_activity_at
+                ? new Date(stats.last_activity_at).toLocaleDateString()
+                : 'no versions yet'}
+            />
+          </SimpleGrid>
+
+          <Divider label="Version Distribution" labelPosition="center" />
+
+          <SimpleGrid cols={3} spacing="sm">
+            <StatCard
+              icon={<IconStack size={16} />}
+              label="V1 — Single Version"
+              value={stats.v1_count}
+              color="blue"
+              sub="exactly 1 version"
+            />
+            <StatCard
+              icon={<IconStack size={16} />}
+              label="V2 — Two Versions"
+              value={stats.v2_count}
+              color="teal"
+              sub="exactly 2 versions"
+            />
+            <StatCard
+              icon={<IconStack size={16} />}
+              label="V3+ — Mature"
+              value={stats.v3plus_count}
+              color="violet"
+              sub="3 or more versions"
+            />
+          </SimpleGrid>
+
+          {stats.total_courses > 0 && (
+            <Paper withBorder p="sm" radius="md">
+              {(() => {
+                const total = stats.v1_count + stats.v2_count + stats.v3plus_count || 1
+                const v1pct = Math.round((stats.v1_count     / total) * 100)
+                const v2pct = Math.round((stats.v2_count     / total) * 100)
+                const v3pct = 100 - v1pct - v2pct
+                return (
+                  <Stack gap={6}>
+                    <Text size="xs" fw={500} c="dimmed">Distribution</Text>
+                    <Group gap={0} style={{ borderRadius: 4, overflow: 'hidden', height: 12 }}>
+                      {v1pct > 0 && <Box style={{ width: `${v1pct}%`, background: 'var(--mantine-color-blue-5)' }} />}
+                      {v2pct > 0 && <Box style={{ width: `${v2pct}%`, background: 'var(--mantine-color-teal-5)' }} />}
+                      {v3pct > 0 && <Box style={{ width: `${v3pct}%`, background: 'var(--mantine-color-violet-5)' }} />}
+                    </Group>
+                    <Group gap="md">
+                      <Group gap={4}><Box w={10} h={10} style={{ borderRadius: 2, background: 'var(--mantine-color-blue-5)', flexShrink: 0 }} /><Text size="xs" c="dimmed">V1 {v1pct}%</Text></Group>
+                      <Group gap={4}><Box w={10} h={10} style={{ borderRadius: 2, background: 'var(--mantine-color-teal-5)', flexShrink: 0 }} /><Text size="xs" c="dimmed">V2 {v2pct}%</Text></Group>
+                      <Group gap={4}><Box w={10} h={10} style={{ borderRadius: 2, background: 'var(--mantine-color-violet-5)', flexShrink: 0 }} /><Text size="xs" c="dimmed">V3+ {v3pct}%</Text></Group>
+                    </Group>
+                  </Stack>
+                )
+              })()}
+            </Paper>
+          )}
+        </Stack>
+      )}
+    </Modal>
+  )
+}
+
 // ── Instance group (collapsible, with category sub-groups) ────────────────────
 
 interface InstanceGroupProps {
@@ -486,7 +664,8 @@ function InstanceGroup({
   name, categories, selected, checkedShortnames,
   onSelect, onToggle, onToggleSet,
 }: InstanceGroupProps) {
-  const [open, setOpen] = useState(true)
+  const [open,      setOpen]      = useState(true)
+  const [dashOpen,  setDashOpen]  = useState(false)
   const isLocal      = name === 'Local'
   const allCourses   = Object.values(categories).flat()
   const totalVers    = allCourses.reduce((s, c) => s + c.version_count, 0)
@@ -519,7 +698,15 @@ function InstanceGroup({
         <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
           {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
         </ThemeIcon>
-        <Text fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'} style={{ flex: 1 }}>{name}</Text>
+        <Tooltip label="View instance stats" position="right" withArrow>
+          <Text
+            fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}
+            style={{ flex: 1, cursor: 'pointer', textDecoration: 'underline dotted' }}
+            onClick={e => { e.stopPropagation(); setDashOpen(true) }}
+          >
+            {name}
+          </Text>
+        </Tooltip>
         <Badge size="xs" variant="outline" color={isLocal ? 'gray' : 'blue'}>
           {allCourses.length}
         </Badge>
@@ -530,6 +717,12 @@ function InstanceGroup({
           {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         </ActionIcon>
       </Group>
+
+      <InstanceDashboard
+        instanceName={name}
+        opened={dashOpen}
+        onClose={() => setDashOpen(false)}
+      />
 
       {/* Category sub-groups */}
       <Collapse in={open}>
@@ -563,6 +756,8 @@ export default function LibraryPage() {
   const [bulkDone,   setBulkDone]   = useState(0)
   const [confirmBulk, setConfirmBulk] = useState(false)
   const [uploading,  setUploading]  = useState(false)
+  const [search,     setSearch]     = useState('')
+  const [filterCat,  setFilterCat]  = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
@@ -629,8 +824,25 @@ export default function LibraryPage() {
     }
   }
 
+  const allCategories = useMemo(() =>
+    [...new Set(courses.map(c => c.category || 'Uncategorized'))].sort(),
+    [courses]
+  )
+
+  const filteredCourses = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    return courses.filter(c => {
+      const matchSearch = !q ||
+        c.fullname.toLowerCase().includes(q) ||
+        c.shortname.toLowerCase().includes(q) ||
+        (c.professor || '').toLowerCase().includes(q)
+      const matchCat = !filterCat || (c.category || 'Uncategorized') === filterCat
+      return matchSearch && matchCat
+    })
+  }, [courses, search, filterCat])
+
   // Group by instance → category; Local first
-  const grouped = courses.reduce<Record<string, Record<string, Course[]>>>((acc, c) => {
+  const grouped = filteredCourses.reduce<Record<string, Record<string, Course[]>>>((acc, c) => {
     const inst = c.instance || 'Local'
     const cat  = c.category  || 'Uncategorized'
     if (!acc[inst]) acc[inst] = {}
@@ -723,6 +935,36 @@ export default function LibraryPage() {
           or import from the <strong>Moodle Courses</strong> tab.
         </Alert>
       )}
+
+      {/* Search / filter bar */}
+      <Group gap="sm" style={{ flexShrink: 0 }}>
+        <TextInput
+          placeholder="Search by name, shortname, professor…"
+          leftSection={<IconSearch size={14} />}
+          rightSection={search
+            ? <ActionIcon size="xs" variant="subtle" color="gray" onClick={() => setSearch('')}><IconX size={12} /></ActionIcon>
+            : null}
+          value={search}
+          onChange={e => setSearch(e.currentTarget.value)}
+          size="xs"
+          style={{ flex: 1 }}
+        />
+        <Select
+          placeholder="All categories"
+          data={allCategories}
+          value={filterCat}
+          onChange={setFilterCat}
+          clearable
+          searchable
+          size="xs"
+          style={{ width: 220 }}
+        />
+        {(search || filterCat) && (
+          <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+            {filteredCourses.length} of {courses.length}
+          </Text>
+        )}
+      </Group>
 
       {/* Two-panel split */}
       <Group align="flex-start" wrap="nowrap" style={{ flex: 1, overflow: 'hidden' }} gap="sm">

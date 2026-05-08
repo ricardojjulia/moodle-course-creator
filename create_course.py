@@ -115,12 +115,16 @@ _COMPETENCIES = ('<?xml version="1.0" encoding="UTF-8"?>\n'
 # ─── LLM helpers ──────────────────────────────────────────────────────────────
 
 def call_llm(messages, llm_url, model_id="local-model",
-             temperature=0.7, max_tokens=4096, retries=3):
+             temperature=0.7, max_tokens=4096, retries=3, api_key=""):
     """POST to the OpenAI-compatible /chat/completions endpoint."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     for attempt in range(1, retries + 1):
         try:
             r = requests.post(
                 f"{llm_url}/chat/completions",
+                headers=headers,
                 json={"model": model_id, "messages": messages,
                       "temperature": temperature, "max_tokens": max_tokens},
                 timeout=360,
@@ -495,7 +499,7 @@ SYS_SPANISH_JSON = (
 )
 
 
-def generate_course_structure(shortname, fullname, prompt, llm_url, model_id):
+def generate_course_structure(shortname, fullname, prompt, llm_url, model_id, api_key=""):
     print("  → Generating course structure (5 modules)…")
     messages = [
         {"role": "system", "content": SYS_SPANISH_JSON},
@@ -522,7 +526,7 @@ Devuelve EXACTAMENTE este JSON (sin texto extra):
 Incluye exactamente 5 módulos.
 """},
     ]
-    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=2000)
+    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=2000, api_key=api_key)
     data = extract_json(raw)
     assert len(data["modules"]) == 5, "Expected 5 modules"
     return data
@@ -530,7 +534,7 @@ Incluye exactamente 5 módulos.
 
 def generate_module_content(mod_num, mod_title, objective, key_topics,
                              course_fullname, professor, llm_url, model_id,
-                             extra_instructions="", custom_prompt=""):
+                             extra_instructions="", custom_prompt="", api_key=""):
     print(f"  → Module {mod_num}: {mod_title[:55]}…")
     if custom_prompt.strip():
         user_content = custom_prompt
@@ -563,11 +567,11 @@ Incluye exactamente 10 términos en glossary y entre 5 y 7 secciones."""
         {"role": "system", "content": SYS_SPANISH_JSON},
         {"role": "user", "content": user_content},
     ]
-    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=6000)
+    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=6000, api_key=api_key)
     return extract_json(raw)
 
 
-def generate_syllabus(course_fullname, shortname, professor, modules, llm_url, model_id):
+def generate_syllabus(course_fullname, shortname, professor, modules, llm_url, model_id, api_key=""):
     print("  → Generating PRONTUARIO (syllabus)…")
     module_lines = "\n".join(
         f"- {m['title']}: {m['objective']}" for m in modules
@@ -593,11 +597,11 @@ Devuelve EXACTAMENTE este JSON:
 }}
 """},
     ]
-    raw = call_llm(messages, llm_url, model_id, temperature=0.6, max_tokens=4000)
+    raw = call_llm(messages, llm_url, model_id, temperature=0.6, max_tokens=4000, api_key=api_key)
     return extract_json(raw)
 
 
-def generate_quiz_questions(course_fullname, modules, num_questions, llm_url, model_id):
+def generate_quiz_questions(course_fullname, modules, num_questions, llm_url, model_id, api_key=""):
     print(f"  → Generating {num_questions} quiz questions…")
     module_summary = "\n".join(
         f"Módulo {m['number']}: {m['title']} — Temas: {', '.join(m.get('key_topics', []))}"
@@ -632,7 +636,7 @@ Devuelve un JSON array de {count} objetos:
 ]
 """},
         ]
-        raw = call_llm(messages, llm_url, model_id, temperature=0.5, max_tokens=5000)
+        raw = call_llm(messages, llm_url, model_id, temperature=0.5, max_tokens=5000, api_key=api_key)
         batch = extract_json(raw)
         if not isinstance(batch, list):
             batch = batch.get("questions", [])
@@ -641,7 +645,7 @@ Devuelve un JSON array de {count} objetos:
 
 
 def generate_homework_prompts(course_fullname, modules, homework_spec,
-                              llm_url, model_id):
+                              llm_url, model_id, api_key=""):
     """Generate homework descriptions for specified weeks.
 
     homework_spec: dict {module_num (1-based int): 'assign'|'forum'}
@@ -680,7 +684,7 @@ Devuelve EXACTAMENTE este JSON:
 }}
 """},
         ]
-        raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=2000)
+        raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=2000, api_key=api_key)
         data = extract_json(raw)
         results[mod_num] = {
             'type':        hw_type,

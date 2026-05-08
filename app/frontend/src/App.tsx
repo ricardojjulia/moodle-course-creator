@@ -1,14 +1,15 @@
 import { useState, useCallback } from 'react'
 import { AppShell, Tabs, Title, Group, Text, Loader, Badge, Box } from '@mantine/core'
 import {
-  IconBooks, IconWand, IconCloud, IconSettings,
+  IconBooks, IconWand, IconCloud, IconSettings, IconShieldCheck,
 } from '@tabler/icons-react'
-import LibraryPage     from './pages/Library'
-import NewCoursePage   from './pages/NewCourse'
-import MoodlePage      from './pages/MoodleCourses'
-import SettingsPage    from './pages/Settings'
+import LibraryPage          from './pages/Library'
+import NewCoursePage        from './pages/NewCourse'
+import MoodlePage           from './pages/MoodleCourses'
+import SettingsPage         from './pages/Settings'
+import AutonomousReviewPage from './pages/AutonomousReview'
 
-type Tab = 'library' | 'new' | 'moodle' | 'settings'
+type Tab = 'library' | 'new' | 'moodle' | 'review' | 'settings'
 
 export default function App() {
   const [tab, setTab]                 = useState<Tab>('library')
@@ -54,6 +55,9 @@ export default function App() {
             <Tabs.Tab value="moodle"   leftSection={<IconCloud size={16} />}>
               Instance Course Catalog
             </Tabs.Tab>
+            <Tabs.Tab value="review" leftSection={<IconShieldCheck size={16} />}>
+              Autonomous Review
+            </Tabs.Tab>
             <Tabs.Tab value="settings" leftSection={<IconSettings size={16} />}>
               Settings
             </Tabs.Tab>
@@ -71,6 +75,7 @@ export default function App() {
         </Box>
 
         {tab === 'moodle'   && <MoodlePage />}
+        {tab === 'review'   && <AutonomousReviewPage />}
         {tab === 'settings' && <SettingsPage />}
       </AppShell.Main>
     </AppShell>

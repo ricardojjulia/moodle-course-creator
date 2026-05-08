@@ -1,0 +1,797 @@
+import { useEffect, useState, useMemo } from 'react'
+import {
+  Stack, Title, Text, Button, Group, Paper, Switch,
+  Textarea, Badge, Loader, ScrollArea,
+  SimpleGrid, ThemeIcon, Autocomplete, Select,
+  Collapse, Box, MultiSelect, Divider,
+} from '@mantine/core'
+import { notifications } from '@mantine/notifications'
+import {
+  IconShieldCheck, IconChevronDown, IconChevronRight,
+  IconSparkles, IconSchool, IconWand,
+  IconCheck, IconX, IconCircle,
+} from '@tabler/icons-react'
+import {
+  api, type Course, type CourseReviewResult, type CourseVersion,
+  type LlmModel,
+} from '../api/client'
+
+// ── Agent defaults ────────────────────────────────────────────────────────────
+
+const DEFAULT_REVIEWER = `# Role: Evangelical Theological Course Reviewer
+You are a senior academic auditor for a conservative Protestant/Evangelical theological college. Your goal is to ensure all course content is biblically sound, academically rigorous, and adheres strictly to Evangelical standards.
+
+## 1. Theological Guardrails
+- **Confessional Stand:** Strictly Evangelical and Protestant.
+- **Exclusion:** Flag and remove any specific Roman Catholic references or traditionalist doctrines that contradict Sola Scriptura.
+- **Requirements:**
+    - Enforce the integration of Bible references in all lessons.
+    - Ensure proper usage of Biblical Hermeneutics and Systematic Theology.
+    - Challenge the author to include modern, practical examples to ground theological concepts.
+
+## 2. Structural Requirements (5-Week Format)
+You must verify the presence of the following:
+- **Syllabus:** Must be comprehensive and clearly outline the 5-week progression.
+- **Dictionary of Terms:** A glossary of theological and technical terms used in the course.
+- **Referential Resources:** A bibliography of Evangelical-approved sources and further reading.
+- **Course Quality:** Evaluate the clarity, tone, and formatting of all Markdown/text content.
+
+## 3. Assessment & Engagement Standards
+- **Assignments:** Minimum of 2 distinct graded assignments.
+- **Testing:** Mandatory final test. Must have a minimum of 30 questions (up to 50 allowed). Flag if the count is <30.
+- **Discussion Boards:** Evaluate if a discussion board is pedagogically necessary for the topic. If missing, suggest where a "peer-to-peer" reflection would add value.
+
+## 4. Review Process
+For every course unit provided, you will:
+1. **Audit** against the Theological Guardrails.
+2. **Checklist** the Structural Requirements.
+3. **Analyze** the Assessments (count questions and assignments).
+4. **Output** a "Course Audit Report" highlighting "Passed," "Needs Revision," or "Missing."`
+
+const DEFAULT_STUDENT = `# Role: Evangelical Student & Content Critic
+You are a high-achieving, critical-thinking student at an Evangelical Theological College. Your job is to "stress test" the course content provided by the Review Agent. You are not a passive learner; you look for gaps in logic, lack of practical application, and academic weaknesses.
+
+## 1. Critical Lens
+- **Theological Depth:** Does this content actually use Hermeneutics, or is it just "proof-texting" (using isolated verses out of context)?
+- **Modern Relevance:** Does this feel like it was written in 1950? Challenge the content if it fails to address how these truths apply to current culture or digital-age ministry.
+- **Ecumenical Blindspots:** While respecting the Protestant stand, point out if the lack of "other" views makes the argument weak or defensive.
+- **The "So What?" Factor:** Critique sections that are too "dry" or academic without explaining the impact on the believer's life.
+
+## 2. Structural Critique
+- **Assignment Load:** Is the workload realistic for a 5-week course, or is it "busy work"?
+- **Test Fairness:** Look at the 30-50 question test. Are the questions clear, or are they "trick" questions?
+- **Resource Accessibility:** Check if the dictionary and references are helpful or just fluff.
+
+## 3. Interaction Protocol
+For every module reviewed, you must provide:
+1. **The Critique:** Point out specifically what is confusing, outdated, or academically "thin."
+2. **The Improvement Suggestion:** Propose a specific change (e.g., "Add a case study about [X]" or "Rewrite this section to better explain the Greek root word").
+3. **The Verdict:** State whether you feel "equipped" by this content or merely "burdened" by it.`
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface AgentConfig {
+  id:          string
+  label:       string
+  color:       string
+  description: string
+  prompt:      string
+  enabled:     boolean
+  _default:    string
+}
+
+interface ReviewRun extends CourseReviewResult {
+  agent_label: string
+  agent_color: string
+}
+
+interface ProgressStep {
+  id:     string
+  label:  string
+  status: 'pending' | 'running' | 'done' | 'error'
+}
+
+// ── Step list component ───────────────────────────────────────────────────────
+
+const STEP_STYLES: Record<ProgressStep['status'], { bg: string; border: string; textColor: string }> = {
+  pending: { bg: 'rgba(255,255,255,0.04)', border: 'transparent',                          textColor: 'dimmed'  },
+  running: { bg: 'rgba(167,139,250,0.18)', border: 'var(--mantine-color-violet-5)',         textColor: 'inherit' },
+  done:    { bg: 'rgba(74,222,128,0.13)',  border: 'var(--mantine-color-green-5)',          textColor: 'green'   },
+  error:   { bg: 'rgba(248,113,113,0.15)', border: 'var(--mantine-color-red-5)',            textColor: 'red'     },
+}
+
+function StepList({ steps }: { steps: ProgressStep[] }) {
+  return (
+    <ScrollArea mah={280} offsetScrollbars>
+      <Stack gap={3} py={2}>
+        {steps.map(step => {
+          const s = STEP_STYLES[step.status]
+          return (
+            <Group
+              key={step.id} gap="xs" wrap="nowrap"
+              style={{
+                padding: '5px 10px',
+                borderRadius: 6,
+                background: s.bg,
+                borderLeft: `3px solid ${s.border}`,
+              }}
+            >
+              {step.status === 'done' && (
+                <ThemeIcon size={16} color="green" variant="filled" radius="xl" style={{ flexShrink: 0 }}>
+                  <IconCheck size={10} />
+                </ThemeIcon>
+              )}
+              {step.status === 'running' && (
+                <Loader size={16} color="violet" style={{ flexShrink: 0 }} />
+              )}
+              {step.status === 'error' && (
+                <ThemeIcon size={16} color="red" variant="filled" radius="xl" style={{ flexShrink: 0 }}>
+                  <IconX size={10} />
+                </ThemeIcon>
+              )}
+              {step.status === 'pending' && (
+                <Box w={16} h={16} style={{ flexShrink: 0, borderRadius: '50%', border: '1.5px solid var(--mantine-color-gray-6)' }} />
+              )}
+              <Text
+                size="xs"
+                fw={step.status === 'running' ? 700 : 400}
+                c={s.textColor as any}
+              >
+                {step.label}
+              </Text>
+            </Group>
+          )
+        })}
+      </Stack>
+    </ScrollArea>
+  )
+}
+
+// ── Build improvement instructions from review results ────────────────────────
+
+function buildInstructions(courseResults: ReviewRun[]): string {
+  const failing = courseResults
+    .filter(r => !r.error)
+    .flatMap(r => (r.sections ?? []).flatMap(s =>
+      s.items
+        .filter(i => i.status === 'Needs Revision' || i.status === 'Missing')
+        .map(i => `[${r.agent_label} · ${s.title}] ${i.label}: ${i.note}`)
+    ))
+  if (!failing.length) return ''
+  return (
+    'Apply ALL of the following improvements identified by expert reviewers:\n\n'
+    + failing.map(f => `- ${f}`).join('\n')
+    + '\n\nEnsure every revision item above is directly addressed. '
+    + 'Where content is flagged as Missing, add it in full. '
+    + 'Where content Needs Revision, rewrite it to meet the standard described. '
+    + 'Maintain the existing course structure and module titles.'
+  )
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const overallColor = (o: string) =>
+  o === 'Passed' ? 'green' : o === 'Needs Revision' ? 'orange' : 'red'
+
+const statusColor = (s: string) =>
+  s === 'Passed' ? 'green' : s === 'Needs Revision' ? 'orange' : 'red'
+
+const scoreColor = (n: number) => n >= 80 ? 'green' : n >= 60 ? 'yellow' : 'red'
+
+// ── Agent config card ─────────────────────────────────────────────────────────
+
+function AgentCard({
+  config, onChange,
+}: {
+  config: AgentConfig
+  onChange: (patch: Partial<AgentConfig>) => void
+}) {
+  const [editOpen, setEditOpen] = useState(false)
+  const Icon = config.id === 'reviewer' ? IconShieldCheck : IconSchool
+
+  return (
+    <Paper
+      withBorder p="md" radius="md"
+      style={{
+        borderLeft: `3px solid var(--mantine-color-${config.color}-5)`,
+        opacity: config.enabled ? 1 : 0.55,
+        transition: 'opacity 0.15s',
+      }}
+    >
+      <Group justify="space-between" mb={4}>
+        <Group gap="xs">
+          <ThemeIcon size="sm" color={config.color} variant="light">
+            <Icon size={14} />
+          </ThemeIcon>
+          <Text size="sm" fw={600} c={config.color}>{config.label}</Text>
+        </Group>
+        <Switch
+          checked={config.enabled}
+          onChange={e => onChange({ enabled: e.currentTarget.checked })}
+          size="sm"
+        />
+      </Group>
+
+      <Text size="xs" c="dimmed" mb="xs">{config.description}</Text>
+
+      <Group gap="xs">
+        <Button
+          size="xs" variant="subtle" px={0}
+          rightSection={editOpen ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />}
+          onClick={() => setEditOpen(o => !o)}
+          color={config.color}
+        >
+          {editOpen ? 'Hide prompt' : 'Edit prompt'}
+        </Button>
+        {editOpen && (
+          <Button
+            size="xs" variant="subtle" color="gray"
+            onClick={() => onChange({ prompt: config._default })}
+          >
+            Reset
+          </Button>
+        )}
+      </Group>
+
+      <Collapse in={editOpen}>
+        <Textarea
+          mt="xs"
+          minRows={8}
+          autosize
+          value={config.prompt}
+          onChange={e => onChange({ prompt: e.currentTarget.value })}
+          styles={{ input: { fontFamily: 'monospace', fontSize: 11 } }}
+        />
+      </Collapse>
+    </Paper>
+  )
+}
+
+// ── Result card ───────────────────────────────────────────────────────────────
+
+function ResultCard({ result }: { result: ReviewRun }) {
+  const [open, setOpen] = useState(false)
+
+  const allItems    = result.sections?.flatMap(s => s.items) ?? []
+  const passedCount = allItems.filter(i => i.status === 'Passed').length
+  const borderColor = result.error ? 'red' : overallColor(result.overall ?? '')
+
+  return (
+    <Paper
+      withBorder p="md" radius="md"
+      style={{ borderLeft: `3px solid var(--mantine-color-${borderColor}-5)` }}
+    >
+      {result.error ? (
+        <Group gap="xs">
+          <Text fw={600} size="sm">{result.shortname}</Text>
+          <Badge size="xs" color="red">Error</Badge>
+          <Badge size="xs" color={result.agent_color} variant="outline">{result.agent_label}</Badge>
+          <Text size="xs" c="dimmed" ml="xs">{result.error}</Text>
+        </Group>
+      ) : (
+        <>
+          <Group justify="space-between" mb="xs" wrap="nowrap">
+            <Stack gap={2}>
+              <Group gap="xs">
+                <Text fw={700} size="sm">{result.shortname}</Text>
+                <Badge size="xs" color={result.agent_color} variant="dot">{result.agent_label}</Badge>
+              </Group>
+              {result.version_num && <Text size="xs" c="dimmed">v{result.version_num}</Text>}
+            </Stack>
+            <Group gap="xs" style={{ flexShrink: 0 }}>
+              <Badge size="sm" color={overallColor(result.overall)} variant="filled">
+                {result.overall}
+              </Badge>
+              <Badge size="sm" color={scoreColor(result.score)} variant="light">
+                {result.score}/100
+              </Badge>
+            </Group>
+          </Group>
+
+          <Text size="xs" c="dimmed" mb="sm">{result.summary}</Text>
+
+          <Group gap="xs" mb="xs">
+            <Text size="xs" c="dimmed">{passedCount}/{allItems.length} checks passed</Text>
+          </Group>
+
+          <Button
+            variant="subtle" size="xs" px={0}
+            rightSection={open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+            onClick={() => setOpen(o => !o)}
+          >
+            {open ? 'Hide audit detail' : 'View audit detail'}
+          </Button>
+
+          <Collapse in={open}>
+            <Stack gap="md" mt="sm">
+              {result.sections?.map(section => {
+                const sectionPassed = section.items.filter(i => i.status === 'Passed').length
+                return (
+                  <Box key={section.title}>
+                    <Group gap="xs" mb={6}>
+                      <Text size="xs" fw={700} tt="uppercase" lts={0.5} c="dimmed">
+                        {section.title}
+                      </Text>
+                      <Badge size="xs" variant="outline" color={sectionPassed === section.items.length ? 'green' : 'orange'}>
+                        {sectionPassed}/{section.items.length}
+                      </Badge>
+                    </Group>
+                    <Stack gap={6}>
+                      {section.items.map((item, i) => (
+                        <Group key={i} gap="xs" wrap="nowrap" align="flex-start">
+                          <Badge
+                            size="xs"
+                            color={statusColor(item.status)}
+                            variant="light"
+                            style={{ flexShrink: 0, minWidth: 100 }}
+                          >
+                            {item.status}
+                          </Badge>
+                          <Box>
+                            <Text size="xs" fw={500}>{item.label}</Text>
+                            {item.note && <Text size="xs" c="dimmed">{item.note}</Text>}
+                          </Box>
+                        </Group>
+                      ))}
+                    </Stack>
+                  </Box>
+                )
+              })}
+            </Stack>
+          </Collapse>
+        </>
+      )}
+    </Paper>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+const INITIAL_AGENTS: AgentConfig[] = [
+  {
+    id:          'reviewer',
+    label:       'Course Reviewer',
+    color:       'violet',
+    description: 'Senior academic auditor — checks theology, structure, assessments, and course quality.',
+    prompt:      DEFAULT_REVIEWER,
+    enabled:     true,
+    _default:    DEFAULT_REVIEWER,
+  },
+  {
+    id:          'student',
+    label:       'Student Critic',
+    color:       'teal',
+    description: 'Critical student perspective — stress-tests depth, relevance, fairness, and the "So What?" factor.',
+    prompt:      DEFAULT_STUDENT,
+    enabled:     true,
+    _default:    DEFAULT_STUDENT,
+  },
+]
+
+export default function AutonomousReviewPage() {
+  const [courses,     setCourses]     = useState<Course[]>([])
+  const [agents,      setAgents]      = useState<AgentConfig[]>(INITIAL_AGENTS)
+  const [filterCat,   setFilterCat]   = useState<string | null>(null)
+  const [selectedSns, setSelectedSns] = useState<string[]>([])
+  const [modelId,     setModelId]     = useState('')
+  const [modelOptions,setModelOptions]= useState<string[]>([])
+  const [running,      setRunning]      = useState(false)
+  const [results,      setResults]      = useState<ReviewRun[]>([])
+  const [configOpen,   setConfigOpen]   = useState(true)
+  const [reviewSteps,  setReviewSteps]  = useState<ProgressStep[]>([])
+  const [regenerating, setRegenerating] = useState<Record<string, boolean>>({})
+  const [regenSteps,   setRegenSteps]   = useState<Record<string, ProgressStep[]>>({})
+  const [regenDone,    setRegenDone]    = useState<Record<string, CourseVersion>>({})
+
+  useEffect(() => {
+    api.courses.list().then(cs => {
+      setCourses(cs)
+      setSelectedSns(cs.map(c => c.shortname))
+    }).catch(() => {})
+
+    api.llm.evaluationCache().then(cache => {
+      if (cache.results.length) {
+        setModelOptions(cache.results.map(m => m.id))
+        setModelId(cache.results[0].id)
+      }
+    }).catch(() => {
+      api.llm.models().then(ms => {
+        setModelOptions(ms.map((m: LlmModel) => m.id))
+        if (ms.length) setModelId(ms[0].id)
+      }).catch(() => {})
+    })
+  }, [])
+
+  const patchAgent = (id: string, patch: Partial<AgentConfig>) =>
+    setAgents(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a))
+
+  const allCategories = useMemo(() => {
+    const cats = [...new Set(courses.map(c => c.category).filter(Boolean))]
+    return cats.sort().map(c => ({ value: c, label: c }))
+  }, [courses])
+
+  const filteredCourses = useMemo(() =>
+    filterCat ? courses.filter(c => c.category === filterCat) : courses,
+    [courses, filterCat]
+  )
+
+  const courseOptions = filteredCourses.map(c => ({
+    value: c.shortname,
+    label: `${c.shortname} — ${c.fullname}`,
+  }))
+
+  const enabledAgents = agents.filter(a => a.enabled)
+
+  const groupedResults = useMemo(() => {
+    const map = new Map<string, ReviewRun[]>()
+    for (const r of results) {
+      if (!map.has(r.shortname)) map.set(r.shortname, [])
+      map.get(r.shortname)!.push(r)
+    }
+    return [...map.entries()]
+  }, [results])
+
+  const setRegenStep = (sn: string, id: string, status: ProgressStep['status']) =>
+    setRegenSteps(prev => ({
+      ...prev,
+      [sn]: (prev[sn] ?? []).map(s => s.id === id ? { ...s, status } : s),
+    }))
+
+  const applyFeedback = async (shortname: string, courseResults: ReviewRun[]) => {
+    const validResults = courseResults.filter(r => !r.error && r.sections?.length)
+    if (!validResults.length) return
+
+    const instructions = buildInstructions(validResults)
+    if (!instructions) {
+      notifications.show({ title: 'Nothing to improve', message: 'All checks passed!', color: 'green' })
+      return
+    }
+
+    // Fetch latest version to discover modules
+    const versions = await api.courses.versions(shortname).catch(() => [])
+    if (!versions.length) return
+    const latestVer = await api.courses.version(shortname, versions[0].id).catch(() => null)
+    if (!latestVer) return
+
+    const modules: Array<{ number: number; title: string }> =
+      ((latestVer.content?.course_structure as any)?.modules ?? [])
+
+    // Build step list
+    const steps: ProgressStep[] = [
+      { id: 'fork',     label: 'Fork current version',  status: 'pending' },
+      ...modules.map(m => ({
+        id:     `mod-${m.number}`,
+        label:  `Module ${m.number}: ${m.title}`,
+        status: 'pending' as const,
+      })),
+      { id: 'finalize', label: 'Quiz & Syllabus',        status: 'pending' },
+    ]
+    setRegenSteps(prev => ({ ...prev, [shortname]: steps }))
+    setRegenerating(prev => ({ ...prev, [shortname]: true }))
+
+    try {
+      // Fork
+      setRegenStep(shortname, 'fork', 'running')
+      const forked = await api.courses.fork(shortname, latestVer.id)
+      setRegenStep(shortname, 'fork', 'done')
+
+      // Regenerate each module
+      for (const mod of modules) {
+        setRegenStep(shortname, `mod-${mod.number}`, 'running')
+        await api.courses.regenerateModule(shortname, forked.id, mod.number, {
+          instructions,
+          model_id: modelId,
+        })
+        setRegenStep(shortname, `mod-${mod.number}`, 'done')
+      }
+
+      // Finalize: quiz + syllabus
+      setRegenStep(shortname, 'finalize', 'running')
+      const finalVer = await api.courses.finalizeReview(shortname, forked.id, {
+        reviews:  validResults as CourseReviewResult[],
+        model_id: modelId,
+      })
+      setRegenStep(shortname, 'finalize', 'done')
+
+      setRegenDone(prev => ({ ...prev, [shortname]: finalVer }))
+      notifications.show({
+        title:   'Regeneration complete',
+        message: `${shortname} → v${finalVer.version_num} saved to Library`,
+        color:   'green',
+        icon:    <IconWand size={16} />,
+      })
+    } catch (e: any) {
+      notifications.show({
+        title:   'Regeneration failed',
+        message: e.message ?? 'Unknown error',
+        color:   'red',
+      })
+    } finally {
+      setRegenerating(prev => ({ ...prev, [shortname]: false }))
+    }
+  }
+
+  const updateReviewStep = (id: string, status: ProgressStep['status']) =>
+    setReviewSteps(prev => prev.map(s => s.id === id ? { ...s, status } : s))
+
+  const startReview = async () => {
+    if (enabledAgents.length === 0) {
+      notifications.show({ title: 'No agents enabled', message: 'Enable at least one review agent.', color: 'orange' })
+      return
+    }
+    setResults([])
+    setRunning(true)
+    setConfigOpen(false)
+
+    const toReview = courses.filter(c => selectedSns.includes(c.shortname))
+
+    // Build full step list upfront
+    const steps: ProgressStep[] = toReview.flatMap(course =>
+      enabledAgents.map(agent => ({
+        id:     `${course.shortname}::${agent.id}`,
+        label:  `${course.shortname} · ${agent.label}`,
+        status: 'pending' as const,
+      }))
+    )
+    setReviewSteps(steps)
+
+    let completed = 0
+
+    for (const course of toReview) {
+      for (const agent of enabledAgents) {
+        const stepId = `${course.shortname}::${agent.id}`
+        updateReviewStep(stepId, 'running')
+
+        try {
+          const result = await api.courses.review(course.shortname, {
+            agent_context: agent.prompt,
+            model_id:      modelId,
+          })
+          setResults(prev => [...prev, { ...result, agent_label: agent.label, agent_color: agent.color }])
+          updateReviewStep(stepId, 'done')
+        } catch (e: any) {
+          setResults(prev => [...prev, {
+            shortname:   course.shortname,
+            version_num: null,
+            overall:     'Incomplete' as const,
+            score:       0,
+            summary:     '',
+            sections:    [],
+            error:       e.message ?? 'Unknown error',
+            agent_label: agent.label,
+            agent_color: agent.color,
+          }])
+          updateReviewStep(stepId, 'error')
+        }
+
+        completed++
+      }
+    }
+
+    setRunning(false)
+    notifications.show({
+      title:   'Review complete',
+      message: `${completed} run${completed !== 1 ? 's' : ''} across ${toReview.length} course${toReview.length !== 1 ? 's' : ''}`,
+      color:   'green',
+      icon:    <IconShieldCheck size={16} />,
+    })
+  }
+
+  const passed     = results.filter(r => r.overall === 'Passed').length
+  const needsRev   = results.filter(r => r.overall === 'Needs Revision').length
+  const incomplete = results.filter(r => r.overall === 'Incomplete' || r.error).length
+  const avgScore   = results.length
+    ? Math.round(results.filter(r => !r.error).reduce((s, r) => s + (r.score ?? 0), 0) / (results.length - incomplete || 1))
+    : null
+
+  return (
+    <Stack gap="md" maw={1000}>
+
+      {/* Page header */}
+      <Group justify="space-between" align="center">
+        <Group gap="xs">
+          <ThemeIcon size="md" color="violet" variant="light"><IconShieldCheck size={18} /></ThemeIcon>
+          <div>
+            <Title order={3}>Autonomous Review</Title>
+            <Text size="xs" c="dimmed">Bulk LLM audit of library courses against configured review agents</Text>
+          </div>
+        </Group>
+        {results.length > 0 && !running && (
+          <Group gap="xs">
+            <Badge color="green"  variant="light">{passed} Passed</Badge>
+            <Badge color="orange" variant="light">{needsRev} Need Revision</Badge>
+            {incomplete > 0 && <Badge color="red" variant="light">{incomplete} Errors</Badge>}
+            {avgScore !== null && <Badge color={scoreColor(avgScore)} variant="filled">Avg {avgScore}/100</Badge>}
+          </Group>
+        )}
+      </Group>
+
+      {/* Config toggle after first run */}
+      {results.length > 0 && (
+        <Button
+          variant="subtle" size="xs"
+          rightSection={configOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+          onClick={() => setConfigOpen(o => !o)}
+          style={{ alignSelf: 'flex-start' }}
+        >
+          {configOpen ? 'Hide configuration' : 'Show configuration'}
+        </Button>
+      )}
+
+      <Collapse in={configOpen}>
+        <Stack gap="md">
+
+          {/* Agent cards */}
+          <SimpleGrid cols={2} spacing="md">
+            {agents.map(agent => (
+              <AgentCard
+                key={agent.id}
+                config={agent}
+                onChange={patch => patchAgent(agent.id, patch)}
+              />
+            ))}
+          </SimpleGrid>
+
+          {/* Courses + Model */}
+          <SimpleGrid cols={2} spacing="md">
+            <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-blue-5)' }}>
+              <Text size="sm" fw={600} c="blue" mb="xs">Courses to Review</Text>
+              <Select
+                placeholder="All categories"
+                data={allCategories}
+                value={filterCat}
+                onChange={v => { setFilterCat(v); setSelectedSns([]) }}
+                clearable
+                size="sm"
+                mb="xs"
+              />
+              <MultiSelect
+                placeholder="Select courses…"
+                data={courseOptions}
+                value={selectedSns}
+                onChange={setSelectedSns}
+                searchable
+                size="sm"
+                maxDropdownHeight={220}
+              />
+              <Group gap="xs" mt="xs">
+                <Button size="xs" variant="subtle" onClick={() => setSelectedSns(filteredCourses.map(c => c.shortname))}>All</Button>
+                <Button size="xs" variant="subtle" color="gray" onClick={() => setSelectedSns([])}>None</Button>
+                <Text size="xs" c="dimmed">{selectedSns.length} of {filteredCourses.length} selected{filterCat ? ` in "${filterCat}"` : ''}</Text>
+              </Group>
+            </Paper>
+
+            <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-orange-5)' }}>
+              <Text size="sm" fw={600} c="orange" mb="xs">Model</Text>
+              <Autocomplete
+                placeholder="Leave blank for provider default"
+                data={modelOptions}
+                value={modelId}
+                onChange={setModelId}
+                size="sm"
+              />
+              <Text size="xs" c="dimmed" mt="xs">
+                Uses the LLM configured in Settings. Low temperature (0.2) for consistent audit output.
+              </Text>
+            </Paper>
+          </SimpleGrid>
+
+          {/* Start button */}
+          <Button
+            variant="gradient"
+            gradient={{ from: 'violet', to: 'teal', deg: 135 }}
+            size="lg"
+            fullWidth
+            leftSection={running ? <Loader size="xs" color="white" /> : <IconSparkles size={18} />}
+            onClick={startReview}
+            disabled={running || selectedSns.length === 0 || enabledAgents.length === 0}
+          >
+            {running
+              ? `Reviewing…`
+              : `Begin Autonomous Review  (${selectedSns.length} course${selectedSns.length !== 1 ? 's' : ''} × ${enabledAgents.length} agent${enabledAgents.length !== 1 ? 's' : ''})`
+            }
+          </Button>
+
+        </Stack>
+      </Collapse>
+
+      {/* Review progress — step list */}
+      {(running || reviewSteps.length > 0) && (
+        <Paper withBorder p="md" radius="md"
+          style={{ borderLeft: '3px solid var(--mantine-color-violet-5)', background: 'var(--mantine-color-body)' }}>
+          <Group gap="xs" mb="sm">
+            {running && <Loader size="xs" color="violet" />}
+            {!running && <ThemeIcon size="xs" color="green" variant="light" radius="xl"><IconCheck size={10} /></ThemeIcon>}
+            <Text size="xs" fw={600} c="violet">
+              {running
+                ? `Reviewing — ${reviewSteps.filter(s => s.status === 'done').length} of ${reviewSteps.length} done`
+                : `Review complete — ${reviewSteps.filter(s => s.status === 'done').length} of ${reviewSteps.length} done`
+              }
+            </Text>
+          </Group>
+          <StepList steps={reviewSteps} />
+        </Paper>
+      )}
+
+      {/* Results — grouped by course */}
+      {results.length > 0 && (
+        <>
+          <Divider
+            label={`${results.length} audit${results.length !== 1 ? 's' : ''} across ${groupedResults.length} course${groupedResults.length !== 1 ? 's' : ''}`}
+            labelPosition="center"
+          />
+          <Stack gap="lg">
+            {groupedResults.map(([sn, courseResults]) => {
+              const courseMeta     = courses.find(c => c.shortname === sn)
+              const hasValidResult = courseResults.some(r => !r.error && r.sections?.length)
+              const isRegenerating = regenerating[sn]
+              const doneVer        = regenDone[sn]
+              const agentLabels    = [...new Set(courseResults.map(r => r.agent_label))]
+
+              return (
+                <Box key={sn}>
+                  {/* Course row header */}
+                  <Paper
+                    withBorder p="sm" radius="md" mb="xs"
+                    style={{ borderLeft: '3px solid var(--mantine-color-violet-5)' }}
+                  >
+                    <Group justify="space-between" wrap="nowrap">
+                      <Stack gap={2}>
+                        <Group gap="xs">
+                          <Text fw={700} size="sm">{sn}</Text>
+                          {agentLabels.map(l => (
+                            <Badge key={l} size="xs" variant="outline"
+                              color={courseResults.find(r => r.agent_label === l)?.agent_color ?? 'gray'}>
+                              {l}
+                            </Badge>
+                          ))}
+                        </Group>
+                        {courseMeta?.fullname && (
+                          <Text size="xs" c="dimmed">{courseMeta.fullname}</Text>
+                        )}
+                      </Stack>
+
+                      <Group gap="xs" style={{ flexShrink: 0 }}>
+                        {doneVer ? (
+                          <Badge color="green" variant="filled" leftSection={<IconWand size={11} />}>
+                            Regenerated → v{doneVer.version_num}
+                          </Badge>
+                        ) : (
+                          <Button
+                            size="xs"
+                            variant="gradient"
+                            gradient={{ from: 'violet', to: 'teal', deg: 135 }}
+                            leftSection={isRegenerating ? <Loader size={10} color="white" /> : <IconWand size={13} />}
+                            disabled={!hasValidResult || isRegenerating}
+                            loading={isRegenerating}
+                            onClick={() => applyFeedback(sn, courseResults)}
+                          >
+                            {isRegenerating ? 'Regenerating…' : 'Apply feedback & regenerate'}
+                          </Button>
+                        )}
+                      </Group>
+                    </Group>
+
+                    {regenSteps[sn]?.length > 0 && (
+                      <Box mt="sm">
+                        <StepList steps={regenSteps[sn]} />
+                      </Box>
+                    )}
+                  </Paper>
+
+                  {/* Result cards for this course */}
+                  <SimpleGrid cols={2} spacing="sm">
+                    {courseResults.map((r, idx) => (
+                      <ResultCard key={`${r.shortname}-${r.agent_label}-${idx}`} result={r} />
+                    ))}
+                  </SimpleGrid>
+                </Box>
+              )
+            })}
+          </Stack>
+        </>
+      )}
+
+    </Stack>
+  )
+}

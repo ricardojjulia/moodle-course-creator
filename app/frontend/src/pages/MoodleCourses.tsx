@@ -4,7 +4,7 @@ import {
   Paper, Loader, Alert, Table, ActionIcon,
   Tooltip, Modal, Textarea, ScrollArea, Divider,
   ThemeIcon, Checkbox, Progress, Box, Collapse,
-  SegmentedControl,
+  SegmentedControl, SimpleGrid, RingProgress, Center,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
@@ -13,6 +13,8 @@ import {
   IconDatabaseImport, IconArchive,
   IconChevronDown, IconChevronRight,
   IconReportAnalytics,
+  IconBook2, IconCategory, IconClock, IconUsers,
+  IconFileCheck, IconFileX, IconMagnet,
 } from '@tabler/icons-react'
 import {
   api, type MoodleCourse, type MoodleSection,
@@ -26,6 +28,162 @@ function capBadge(canPush: boolean) {
   return canPush
     ? <Badge size="xs" color="green" leftSection={<IconLockOpen size={10} />}>API</Badge>
     : <Badge size="xs" color="gray"  leftSection={<IconLock size={10} />}>.mbz</Badge>
+}
+
+// ── Shared stat card ─────────────────────────────────────────────────────────
+
+function StatCard({ icon, label, value, color, sub }: {
+  icon: React.ReactNode
+  label: string
+  value: React.ReactNode
+  color: string
+  sub?: string
+}) {
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group gap="sm" wrap="nowrap" align="flex-start">
+        <ThemeIcon size="lg" variant="light" color={color} style={{ flexShrink: 0 }}>
+          {icon}
+        </ThemeIcon>
+        <Box>
+          <Text size="xs" c="dimmed" fw={500} tt="uppercase" lts={0.5}>{label}</Text>
+          <Text fw={700} size="xl" lh={1.2}>{value}</Text>
+          {sub && <Text size="xs" c="dimmed" mt={2}>{sub}</Text>}
+        </Box>
+      </Group>
+    </Paper>
+  )
+}
+
+// ── Moodle instance dashboard modal ──────────────────────────────────────────
+
+function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose }: {
+  siteName: string
+  courses: MoodleCourse[]
+  catGroups: Record<string, MoodleCourse[]>
+  opened: boolean
+  onClose: () => void
+}) {
+  const [libShortnames, setLibShortnames] = useState<Set<string>>(new Set())
+  const [avgUsers,      setAvgUsers]      = useState<number | null>(null)
+  const [loading,       setLoading]       = useState(false)
+
+  useEffect(() => {
+    if (!opened) return
+    setLoading(true)
+    Promise.all([
+      api.courses.list().then(list => setLibShortnames(new Set(list.map(c => c.shortname)))),
+      api.moodle.stats().then(s => {
+        if (s.total_users != null && courses.length > 0)
+          setAvgUsers(Math.round(s.total_users / courses.length))
+      }).catch(() => {}),
+    ]).finally(() => setLoading(false))
+  }, [opened])
+
+  const totalCourses     = courses.length
+  const totalCategories  = Object.keys(catGroups).length
+  const inLibrary        = courses.filter(c => libShortnames.has(c.shortname)).length
+  const notInLibrary     = totalCourses - inLibrary
+  const libPct           = totalCourses > 0 ? Math.round((inLibrary / totalCourses) * 100) : 0
+
+  const coursesWithDates = courses.filter(c => c.startdate && c.enddate && c.enddate > c.startdate)
+  const avgDays = coursesWithDates.length > 0
+    ? Math.round(coursesWithDates.reduce((s, c) => s + (c.enddate - c.startdate) / 86400, 0) / coursesWithDates.length)
+    : null
+
+  return (
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={
+        <Group gap="xs">
+          <ThemeIcon size="sm" variant="light" color="blue">
+            <IconCloud size={14} />
+          </ThemeIcon>
+          <Text fw={600} size="sm">{siteName} — Course Evaluator</Text>
+        </Group>
+      }
+      size="lg"
+    >
+      {loading && <Center py="xl"><Loader size="sm" /></Center>}
+
+      {!loading && (
+        <Stack gap="md">
+          <SimpleGrid cols={2} spacing="sm">
+            <StatCard
+              icon={<IconBook2 size={16} />}
+              label="Total Courses"
+              value={totalCourses}
+              color="blue"
+            />
+            <StatCard
+              icon={<IconCategory size={16} />}
+              label="Total Categories"
+              value={totalCategories}
+              color="teal"
+            />
+            <StatCard
+              icon={<IconClock size={16} />}
+              label="Avg Course Duration"
+              value={avgDays !== null ? `${avgDays}d` : '—'}
+              color="violet"
+              sub={avgDays !== null
+                ? `≈ ${Math.round(avgDays / 7)} weeks`
+                : 'No date data available'}
+            />
+            <StatCard
+              icon={<IconUsers size={16} />}
+              label="Avg Users / Course"
+              value={avgUsers !== null ? avgUsers : '—'}
+              color="orange"
+              sub={avgUsers !== null ? 'Site users ÷ total courses' : 'Could not retrieve'}
+            />
+          </SimpleGrid>
+
+          <Divider label="Library Coverage" labelPosition="center" />
+
+          <Group grow align="flex-start" gap="sm">
+            <StatCard
+              icon={<IconFileCheck size={16} />}
+              label="Imported to Library"
+              value={inLibrary}
+              color="green"
+              sub={`${libPct}% of total`}
+            />
+            <StatCard
+              icon={<IconFileX size={16} />}
+              label="Not in Library"
+              value={notInLibrary}
+              color="red"
+              sub={`${100 - libPct}% of total`}
+            />
+          </Group>
+
+          {totalCourses > 0 && (
+            <Paper withBorder p="sm" radius="md">
+              <Group gap="md" align="center">
+                <RingProgress
+                  size={72}
+                  thickness={8}
+                  sections={[
+                    { value: libPct,       color: 'green' },
+                    { value: 100 - libPct, color: 'red'   },
+                  ]}
+                  label={<Text ta="center" size="xs" fw={700}>{libPct}%</Text>}
+                />
+                <Box>
+                  <Text size="sm" fw={500}>Library Coverage</Text>
+                  <Text size="xs" c="dimmed">
+                    {inLibrary} of {totalCourses} courses have been imported to the local library
+                  </Text>
+                </Box>
+              </Group>
+            </Paper>
+          )}
+        </Stack>
+      )}
+    </Modal>
+  )
 }
 
 // ── Forum push modal ──────────────────────────────────────────────────────────
@@ -364,6 +522,7 @@ export default function MoodleCoursesPage() {
   const [batchItems, setBatchItems]     = useState<BatchItem[]>([])
   const [batching, setBatching]         = useState(false)
   const [instanceOpen, setInstanceOpen] = useState(true)
+  const [dashOpen, setDashOpen]         = useState(false)
 
   // Detail view mode
   const [viewMode, setViewMode]         = useState<'structure' | 'grades'>('structure')
@@ -504,6 +663,33 @@ export default function MoodleCoursesPage() {
     }
   }
 
+  const [detectingMissing, setDetectingMissing] = useState(false)
+
+  const selectMissing = async () => {
+    setDetectingMissing(true)
+    try {
+      const libCourses = await api.courses.list()
+      const libShortnames = new Set(libCourses.map(c => c.shortname))
+      const missingIds = courses
+        .filter(c => !libShortnames.has(c.shortname))
+        .map(c => c.id)
+      setCheckedIds(new Set(missingIds))
+      if (missingIds.length === 0) {
+        notifications.show({ title: 'All caught up', message: 'Every course is already in the library.', color: 'green' })
+      } else {
+        notifications.show({
+          title: `${missingIds.length} missing course${missingIds.length !== 1 ? 's' : ''} selected`,
+          message: 'Ready to import — click "Import selected to library"',
+          color: 'blue',
+        })
+      }
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+    } finally {
+      setDetectingMissing(false)
+    }
+  }
+
   // Group by category for left-panel hierarchy
   const catGroups = courses.reduce<Record<string, MoodleCourse[]>>((acc, c) => {
     const cat = c.category_name || 'Uncategorized'
@@ -550,15 +736,21 @@ export default function MoodleCoursesPage() {
 
     setBatching(false)
     setCheckedIds(new Set())
+    // Don't clear batchItems — keep failures visible until user dismisses
+    const finalItems = items  // captured before state update
+    const errCount = finalItems.filter(i => i.status === 'error').length
     notifications.show({
-      title: 'Batch import complete',
-      message: `${items.length} course${items.length !== 1 ? 's' : ''} processed`,
-      color: 'green',
+      title: errCount > 0 ? `Import complete — ${errCount} failed` : 'Batch import complete',
+      message: errCount > 0
+        ? `${finalItems.length - errCount} imported, ${errCount} failed — see error list below`
+        : `${finalItems.length} course${finalItems.length !== 1 ? 's' : ''} imported`,
+      color: errCount > 0 ? 'orange' : 'green',
     })
   }
 
-  const batchDone  = batchItems.filter(i => i.status === 'done').length
-  const batchTotal = batchItems.length
+  const batchDone    = batchItems.filter(i => i.status === 'done').length
+  const batchErrors  = batchItems.filter(i => i.status === 'error')
+  const batchTotal   = batchItems.length
 
   const PANEL_HEIGHT = 'calc(100vh - 170px)'
 
@@ -578,17 +770,36 @@ export default function MoodleCoursesPage() {
             </Group>
           )}
         </div>
-        <Button variant="subtle" size="xs"
-                leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
-                onClick={loadCourses} disabled={loading}>
-          Refresh
-        </Button>
+        <Group gap="xs">
+          {courses.length > 0 && (
+            <Tooltip label="Auto-select courses not yet in the library">
+              <Button
+                variant="light" size="xs" color="teal"
+                leftSection={detectingMissing ? <Loader size="xs" /> : <IconMagnet size={16} />}
+                onClick={selectMissing}
+                disabled={detectingMissing || loading}
+              >
+                Select Missing
+              </Button>
+            </Tooltip>
+          )}
+          <Button variant="subtle" size="xs"
+                  leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
+                  onClick={loadCourses} disabled={loading}>
+            Refresh
+          </Button>
+        </Group>
       </Group>
 
       {/* ── Batch action bar ──────────────────────────────────────────── */}
-      {(checkedIds.size > 0 || batching) && (
+      {(checkedIds.size > 0 || batching || batchErrors.length > 0) && (
         <Paper withBorder p="xs" radius="md"
-               style={{ background: 'var(--mantine-color-blue-0)', flexShrink: 0 }}>
+               style={{
+                 background: batchErrors.length > 0 && !batching
+                   ? 'var(--mantine-color-orange-0)'
+                   : 'var(--mantine-color-blue-0)',
+                 flexShrink: 0,
+               }}>
           {batching ? (
             <Stack gap={4}>
               <Group justify="space-between">
@@ -596,7 +807,7 @@ export default function MoodleCoursesPage() {
                   Importing {batchDone} / {batchTotal}…
                 </Text>
                 <Text size="xs" c="dimmed">
-                  {batchItems.filter(i => i.status === 'error').length} errors
+                  {batchErrors.length} errors
                 </Text>
               </Group>
               <Progress value={(batchDone / batchTotal) * 100} animated size="sm" />
@@ -610,6 +821,38 @@ export default function MoodleCoursesPage() {
                     {item.status === 'running' && <Loader size={8} color="white" style={{ marginRight: 4 }} />}
                     {item.course.shortname}
                   </Badge>
+                ))}
+              </Group>
+            </Stack>
+          ) : batchErrors.length > 0 && checkedIds.size === 0 ? (
+            <Stack gap={6}>
+              <Group justify="space-between">
+                <Text size="sm" fw={600} c="orange">
+                  {batchErrors.length} course{batchErrors.length !== 1 ? 's' : ''} failed to import
+                </Text>
+                <Group gap="xs">
+                  <Button
+                    size="xs" variant="light" color="orange"
+                    leftSection={<IconDatabaseImport size={14} />}
+                    onClick={() => {
+                      setCheckedIds(new Set(batchErrors.map(i => i.course.id)))
+                      setBatchItems([])
+                    }}
+                  >
+                    Retry failed
+                  </Button>
+                  <Button size="xs" variant="subtle" onClick={() => setBatchItems([])}>
+                    Dismiss
+                  </Button>
+                </Group>
+              </Group>
+              <Group gap={4} wrap="wrap">
+                {batchErrors.map(item => (
+                  <Tooltip key={item.course.id} label={item.error || 'Unknown error'} withArrow>
+                    <Badge size="xs" color="red" style={{ cursor: 'default' }}>
+                      {item.course.shortname}
+                    </Badge>
+                  </Tooltip>
                 ))}
               </Group>
             </Stack>
@@ -667,14 +910,29 @@ export default function MoodleCoursesPage() {
                   <ThemeIcon size="sm" variant="light" color="blue">
                     <IconCloud size={12} />
                   </ThemeIcon>
-                  <Text fw={600} size="sm" c="blue" style={{ flex: 1 }} lineClamp={1}>
-                    {siteName || 'Moodle'}
-                  </Text>
+                  <Tooltip label="View instance stats" position="right" withArrow>
+                    <Text
+                      fw={600} size="sm" c="blue"
+                      style={{ flex: 1, cursor: 'pointer', textDecoration: 'underline dotted' }}
+                      lineClamp={1}
+                      onClick={e => { e.stopPropagation(); setDashOpen(true) }}
+                    >
+                      {siteName || 'Moodle'}
+                    </Text>
+                  </Tooltip>
                   <Badge size="xs" variant="outline" color="blue">{courses.length}</Badge>
                   <ActionIcon size="xs" variant="subtle" color="gray">
                     {instanceOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
                   </ActionIcon>
                 </Group>
+
+                <MoodleInstanceDashboard
+                  siteName={siteName || 'Moodle'}
+                  courses={courses}
+                  catGroups={catGroups}
+                  opened={dashOpen}
+                  onClose={() => setDashOpen(false)}
+                />
 
                 {/* Category groups */}
                 <Collapse in={instanceOpen}>
