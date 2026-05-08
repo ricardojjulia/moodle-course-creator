@@ -4,25 +4,30 @@
 
 1. [Prerequisites](#1-prerequisites)
 2. [Installation](#2-installation)
-3. [Configuration](#3-configuration)
-4. [Running the App](#4-running-the-app)
-5. [Generating a Course](#5-generating-a-course)
+3. [Running the Application](#3-running-the-application)
+4. [First-time Setup (Settings)](#4-first-time-setup-settings)
+5. [Generating a Course from Scratch](#5-generating-a-course-from-scratch)
 6. [Building and Importing the .mbz](#6-building-and-importing-the-mbz)
-7. [Moodle Sync (Live Push)](#7-moodle-sync-live-push)
-8. [Local Moodle with Docker](#8-local-moodle-with-docker)
-9. [LLM Server Setup](#9-llm-server-setup)
-10. [Troubleshooting](#10-troubleshooting)
+7. [Course Library](#7-course-library)
+8. [Autonomous Quality Review](#8-autonomous-quality-review)
+9. [Moodle Integration](#9-moodle-integration)
+10. [LLM Provider Setup](#10-llm-provider-setup)
+11. [Local Moodle with Docker](#11-local-moodle-with-docker)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
 ## 1. Prerequisites
 
-| Requirement | Minimum version | Notes |
-|---|---|---|
-| Python | 3.11 | 3.12+ recommended |
-| Node.js | 20 LTS | includes npm |
-| LLM server | — | LM Studio ≥ 0.3 or Ollama |
-| Moodle | 5.x | for `.mbz` import / sync |
+| Requirement | Minimum | Recommended | Notes |
+| ----------- | ------- | ----------- | ----- |
+| Python | 3.11 | 3.12+ | `python3 --version` to check |
+| Node.js | 20 LTS | 22 LTS | includes npm |
+| LLM server | — | — | See [Section 10](#10-llm-provider-setup) |
+| Moodle | 5.0 | 5.2 | For import/sync — optional |
+| Git | any | — | For cloning the repo |
+
+The application runs entirely on your local machine. No public internet access is required unless you use a cloud LLM provider (OpenAI, OpenRouter, Anthropic).
 
 ---
 
@@ -35,302 +40,418 @@ git clone https://github.com/ricardojjulia/moodle-course-creator.git
 cd moodle-course-creator
 ```
 
-### Python dependencies
+### Python environment
+
+Using a virtual environment is strongly recommended to avoid dependency conflicts:
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# OR
+.venv\Scripts\activate             # Windows
 ```
 
-> **Tip:** Use a virtual environment to keep dependencies isolated:
-> ```bash
-> python3 -m venv .venv
-> source .venv/bin/activate   # Windows: .venv\Scripts\activate
-> pip install -r requirements.txt
-> ```
+Install dependencies:
 
-### Frontend dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Frontend
 
 ```bash
 cd app/frontend
 npm install
-npm run build   # builds the SPA into app/frontend/dist/
+npm run build      # compiles TypeScript and bundles into app/frontend/dist/
 cd ../..
 ```
 
-The FastAPI backend automatically serves the built frontend from `app/frontend/dist/` when you open `http://localhost:8000`.  
-During development you can use `npm run dev` (port 5173) instead and skip the build step.
+The compiled frontend is served automatically by the FastAPI backend from `app/frontend/dist/`. You only need to rebuild when you change frontend source files.
 
 ---
 
-## 3. Configuration
+## 3. Running the Application
 
-All settings are stored in `app/library.db` (SQLite) and can be changed through the **Settings** tab in the UI.
+### Development mode (recommended during setup)
 
-### LLM Server URL
-
-- **LM Studio**: Start the local server in LM Studio → copy the base URL (default `http://localhost:1234/v1`)
-- **Ollama**: `http://localhost:11434/v1` (Ollama exposes an OpenAI-compatible endpoint)
-- **Remote host**: use the machine's LAN IP, e.g. `http://192.168.1.100:1234/v1`
-
-### Moodle URL and Token
-
-Only needed if you want to push content to a live Moodle site.
-
-1. Log into Moodle as admin.
-2. Go to **Site administration → Server → Web services → Manage tokens**.
-3. Create a token for your user with the `moodle_mobile_app` service (or a custom service with the functions listed in `app/backend/routers/moodle.py`).
-4. Paste the token into the **Settings** tab.
-
-> The app will automatically prepend `http://` if you forget the scheme.
-
----
-
-## 4. Running the App
-
-### One-command start (development)
+Run the backend and frontend as two separate processes so both support hot reload:
 
 ```bash
-./start.sh
+# Terminal 1 — backend (API on port 8000)
+source .venv/bin/activate
+uvicorn app.backend.main:app --reload
+
+# Terminal 2 — frontend dev server (UI on port 5173)
+cd app/frontend
+npm run dev
 ```
 
-This launches:
-- **Backend** on `http://localhost:8000` (auto-reload on Python changes)
-- **Frontend** dev server on `http://localhost:5173`
-- Opens `http://localhost:5173` in your browser
+Open **<http://localhost:5173>** in your browser. API calls are proxied to `:8000` automatically.
 
-Logs go to `/tmp/moodle_backend.log` and `/tmp/moodle_frontend.log`.
+### Production mode
 
-### Production mode (served from FastAPI)
+If you only want one process (e.g. on a server or when the frontend is already built):
 
 ```bash
-cd app/frontend && npm run build && cd ../..
+source .venv/bin/activate
 uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000`. The frontend is embedded in the backend — no separate Node process needed.
+Open **<http://localhost:8000>**. The FastAPI server serves the compiled frontend from `app/frontend/dist/`.
 
-### API documentation
+### Data storage
 
-Interactive Swagger UI: `http://localhost:8000/docs`
+The app creates `app/library.db` (SQLite) on first run. This file stores all courses, versions, settings, and Moodle connections. Back it up regularly — it is excluded from git by `.gitignore`.
 
 ---
 
-## 5. Generating a Course
+## 4. First-time Setup (Settings)
 
-### Step 1 — Select and evaluate models
+Open the **Settings** tab to configure your LLM and Moodle connections.
 
-1. Click the **New Course** tab.
-2. The app loads any previously cached evaluation results automatically.
-3. Click **Run Evaluation** to benchmark every model available on your LLM server against a short theology test prompt (~90 seconds per model). Results are cached so you won't need to re-run unless you add new models.
-4. Click a row to select your preferred model. The top-ranked model is pre-selected.
+### LLM Configuration
 
-### Step 2 — Fill in course details
+Enter your LLM server URL in the **LLM URL** field:
 
-| Field | Example | Notes |
-|---|---|---|
-| Short name | `TH310-2026_1` | Used as Moodle's `shortname`; must be unique |
-| Full name | `TH 310 - HERMENÉUTICA` | Display name in Moodle |
-| Professor | `Ricardo Julia` | Appears in the syllabus |
-| Category | `2025 - 2026 Spring Term` | Moodle category label |
-| Start date | `2026-04-20` | ISO 8601 format |
-| End date | `2026-06-15` | ISO 8601 format |
-| Quiz questions | `50` | Total questions in the quiz bank |
+| Provider | URL to enter |
+| -------- | ------------ |
+| LM Studio (local) | `http://localhost:1234/v1` |
+| Ollama (local) | `http://localhost:11434/v1` |
+| OpenAI | `https://api.openai.com/v1` |
+| OpenRouter | `https://openrouter.ai/api/v1` |
+| Anthropic | `https://api.anthropic.com/v1` |
+| Custom / self-hosted | your server's base URL |
 
-### Step 3 — Homework (optional)
+For cloud providers, also enter your **API Key**. For local servers, leave the key blank.
 
-Check the modules (1–5) that should include extra homework. For each checked module, choose:
-- **Assignment** — an upload-based graded assignment
-- **Forum** — a discussion forum with a reflection prompt
+The app auto-detects which provider you are using from the URL and adjusts the model picker accordingly — local providers get the evaluate-and-rank workflow; cloud providers get a simple model ID input.
 
-### Step 4 — Content prompt
+### Moodle Instances
 
-Write a detailed description of the course. Include:
-- Subject and theological tradition (e.g., evangelical, Reformed, Wesleyan)
-- Target audience (seminary students, laypeople, pastors)
-- Key themes and texts
-- Language (the LLM will generate content in the same language as the prompt)
+Click **Add Instance** and fill in:
 
-**Example:**
+- **Name** — a label for this connection (e.g. `Biblos Production`, `Local Docker`)
+- **URL** — your Moodle site root (e.g. `https://biblos.moodlecloud.com`)
+- **Token** — a Moodle webservice token with the required permissions (see [Section 9](#9-moodle-integration))
+
+Click **Save**. The instance appears in the list. Click **Activate** to make it the active connection used throughout the app.
+
+You can save multiple instances and switch between them at any time.
+
+---
+
+## 5. Generating a Course from Scratch
+
+Navigate to the **Course Studio** tab and select **New Course** mode.
+
+### Step 1 — Language Model
+
+**Local LLM:**
+
+1. Click **Evaluate Models** — the app sends a test prompt to every model available on your LLM server and scores them on accuracy, speed, and JSON validity.
+2. The top 3 models are displayed as cards with score rings. Click any card to select it.
+3. Expand "Show all N models" to see the full ranked list.
+
+**Cloud LLM:**
+
+The evaluate workflow is skipped. A model ID autocomplete appears with suggestions for your provider. Type or select a model ID (e.g. `gpt-4o`, `claude-sonnet-4-6`).
+
+### Step 2 — Course Identity
+
+| Field | Description | Example |
+| ----- | ----------- | ------- |
+| Short name | Unique course code used as the filename | `TH308-2026` |
+| Full name | Human-readable course title | `TH 308 — Ética Cristiana` |
+| Professor | Instructor name, appears in the syllabus | `Prof. Ricardo Julia` |
+| Category | Moodle course category | `2025–2026 Spring Term` |
+| Start date | Course start (sets the Moodle timeline) | `2026-01-15` |
+| End date | Course end | `2026-03-15` |
+
+### Step 3 — Assessment
+
+- **Quiz questions** — total number of questions in the final quiz bank (30–50 recommended; reviewers flag anything below 30)
+- **Homework modules** — click any of the five module pills to add a homework activity to that module, then choose the type:
+  - **Assignment** — an LLM-written written assignment prompt
+  - **Forum** — an LLM-written discussion forum prompt
+
+### Step 4 — Course Prompt
+
+Write a plain-text description of the course. The richer and more specific this is, the better the generated content.
+
+**Good prompt:**
+
+```text
+Curso de Ética Cristiana para estudiantes de tercer año de teología evangélica.
+El curso debe abordar: fundamentos bíblicos de la ética, virtud y carácter cristiano,
+dilemas éticos contemporáneos (bioética, ética sexual, justicia social) desde una
+perspectiva reformada. Enfoque práctico para el ministerio pastoral. Idioma: español.
 ```
-Curso de hermenéutica bíblica para estudiantes de teología evangélica de nivel universitario.
-El curso cubre principios de interpretación literal-histórica-gramatical, uso del contexto
-literario e histórico, y aplicación práctica a textos del Antiguo y Nuevo Testamento.
-Énfasis en pasajes proféticos y epístolas paulinas.
+
+**Weak prompt:**
+
+```text
+Ethics course for theology students.
 ```
 
-### Step 5 — Generate
+### Generation
 
-Click **Generate Course**. The stepper shows progress through each pipeline stage:
+Click **Generate Course**. The step tracker shows each phase in real time:
 
-1. **Structure** — LLM creates 5 module titles, objectives, and key topics
-2. **Content** — LLM writes glossary entries and lecture text for each module
-3. **Prontuario** — LLM produces a full academic syllabus
-4. **Quiz** — LLM generates N multiple-choice questions with answers
-5. **Homework** *(if selected)* — LLM writes assignment or forum prompts per module
+1. **Course structure** — module titles, objectives, key topics
+2. **Module content** — lectures, glossary terms, discussion questions (5 modules)
+3. **Syllabus** — prontuario and learning outcomes
+4. **Quiz** — question bank
+5. **Homework** — assignment and forum prompts (if enabled)
 
-Total time: **5–15 minutes** depending on model speed and number of questions.
+Total time: **5–20 minutes** depending on model speed and prompt complexity. Do not close the browser tab while generation is running.
+
+When finished, the course appears in your Library.
 
 ---
 
 ## 6. Building and Importing the .mbz
 
-### Build the archive
+### Build
 
 1. Go to the **Library** tab.
-2. Expand the course you want to export.
-3. Click the **build icon** (arch) on the version row — this packages the stored content into a Moodle 5.x `.mbz` backup file.
-4. Click the **download icon** (green arrow) to download the file.
+2. Find and click your course in the left panel.
+3. In the right panel, select the version you want.
+4. Click **Build .mbz** — the server compiles all content into a Moodle backup archive.
+5. Click **Download** to save the `.mbz` file to your computer.
 
 ### Import into Moodle
 
-1. Log into Moodle as a teacher or administrator.
-2. Go to **Site administration → Courses → Restore course** (or inside a category, click **Restore**).
+1. Log in to your Moodle site as administrator.
+2. Go to **Site administration → Courses → Restore course**.
 3. Upload the `.mbz` file.
-4. Follow the restore wizard: choose **Restore as a new course**, select the target category, confirm settings.
-5. Moodle will restore all sections, pages, forums, quizzes, and (optionally) assignments.
+4. Follow the restore wizard — select a destination category and course settings.
+5. Click **Perform restore**.
 
-> **Note:** The restore may run asynchronously. If you don't see the course immediately, wait a minute and refresh, or check **Site administration → Server → Tasks → Ad hoc tasks**.
-
----
-
-## 7. Moodle Sync (Live Push)
-
-The **Moodle Sync** tab lets you push content directly to an already-existing Moodle course via the REST API, without needing to import a `.mbz`.
-
-### What you can push
-
-- Course metadata (full name, start/end date, visibility)
-- Section summaries
-- Forum discussion posts
-
-### Requirements
-
-- Moodle URL and token must be configured in **Settings**.
-- Web services must be enabled in Moodle: **Site administration → Advanced features → Enable web services**.
-- The REST protocol must be enabled: **Site administration → Plugins → Web services → Manage protocols**.
-- The token's user must have the `webservice/rest:use` capability and teacher-level access in the target course.
+The course will appear in the selected category with all sections, activities, quiz questions, and the syllabus page populated.
 
 ---
 
-## 8. Local Moodle with Docker
+## 7. Course Library
 
-The included `docker-compose.yml` spins up a local Moodle 5.x instance for testing.
+### Browsing
+
+The Library is a two-panel layout:
+
+- **Left panel** — courses grouped by Moodle instance. At the top of each group is a stats card showing total courses, categories, version distribution (V1 / V2 / V3+), and last activity date. Use the search bar and category filter at the top to narrow the list.
+- **Right panel** — appears when you click a course. Shows course metadata, version list, and the full Course Viewer.
+
+### Course Viewer
+
+Click any version to load the Course Viewer. You can browse:
+
+- Module structure (objectives, key topics)
+- Lecture content for each module
+- Glossary terms
+- Discussion questions
+- Quiz questions
+- Syllabus
+
+Click any **activity row** in the content tree to view the full HTML content in a side panel.
+
+### Per-module Regeneration
+
+If a module's content needs improvement without regenerating the whole course:
+
+1. Open the Course Viewer and navigate to the module.
+2. Click the regeneration button (wand icon) next to the module.
+3. Optionally write custom instructions for that regeneration.
+4. The module content is replaced in-place in the current version.
+
+### Forking
+
+Fork a version to create a safe copy before making changes:
+
+- In **Library**: click the version → **Fork** button in the right panel.
+- In **Course Studio → Review**: use the **Fork** button in Step 3.
+
+A new version (incremented version number) is created with identical content.
+
+### Import from Moodle
+
+In the **Moodle Courses** tab, find any live course and click **Import to Library**. The course is parsed from the Moodle site and saved as Version 1 in your library, ready for editing and regeneration.
+
+---
+
+## 8. Autonomous Quality Review
+
+The Autonomous Review feature audits courses in bulk using two configurable LLM agents.
+
+### Setup
+
+1. Navigate to the **Autonomous Review** tab.
+2. **Select a category** in the "Courses to Review" card, then pick individual courses (or use All/None).
+3. **Choose agents** — both are enabled by default:
+   - **Course Reviewer** — checks theology, structure, syllabus, quiz count, and assignment load
+   - **Student Critic** — stress-tests depth, relevance, "So What?" factor, and test fairness
+4. Toggle the switch on each agent card to enable or disable it. Click **Edit prompt** to customise the agent's instructions.
+5. **Select a model** in the Model card.
+
+### Running a Review
+
+Click **Begin Autonomous Review**. A step list appears showing every `course × agent` combination. Rows turn green as each review completes, violet while running, and red on error.
+
+When all reviews finish, results appear below grouped by course.
+
+### Reading Results
+
+Each result card shows:
+
+- **Overall verdict** — Passed / Needs Revision / Incomplete
+- **Score** — 0–100
+- **Summary** — 2–3 sentence overall assessment
+- **Audit detail** — expandable section-by-section breakdown with per-item status (Passed / Needs Revision / Missing) and a one-sentence note
+
+### Applying Feedback
+
+Click **Apply feedback & regenerate** on any course to run the full improvement pipeline:
+
+1. **Fork** — creates a new version from the current latest
+2. **Module regeneration** — each module is rewritten with all "Needs Revision" and "Missing" items from both agents injected as improvement instructions, alongside the existing content as context
+3. **Quiz & Syllabus** — regenerated if the quiz was flagged or has fewer than 30 questions
+
+The step list inside the course header tracks each step in real time. When complete, a badge shows the new version number.
+
+---
+
+## 9. Moodle Integration
+
+### Generating a Moodle Token
+
+1. Log in to Moodle as an administrator.
+2. Go to **Site administration → Server → Web services → Manage tokens**.
+3. Click **Create token**, select a user with admin or manager rights, and choose the **Moodle mobile web service** (or create a custom service).
+4. Copy the token and paste it into Settings → Moodle Instances.
+
+The following webservice functions must be enabled for full functionality:
+
+| Function | Used for |
+| -------- | -------- |
+| `core_course_get_courses` | Browse courses |
+| `core_course_get_contents` | Read section content |
+| `core_course_create_courses` | Deploy new courses |
+| `core_course_update_courses` | Update course metadata |
+| `gradereport_user_get_grade_items` | Grade book view |
+| `mod_forum_add_discussion` | Push forum discussions |
+| `core_webservice_get_site_info` | Ping / site stats |
+
+### Deploying to Moodle
+
+From **Course Studio → Review** (Step 3) or after an Autonomous Review:
+
+1. Click **Deploy to Moodle**.
+2. Select a **Moodle category** from the dropdown.
+3. Optionally set start and end dates.
+4. Click **Deploy** — the course content is pushed to Moodle via the REST API and a new course is created in the chosen category.
+5. A link to the live Moodle course appears on success.
+
+---
+
+## 10. LLM Provider Setup
+
+### LM Studio (recommended for local use)
+
+1. Download [LM Studio](https://lmstudio.ai).
+2. Download a model from the Discover tab (7B–13B parameter models work well; 13B+ gives better theological content).
+3. Go to **Local Server** and click **Start Server**.
+4. In Settings, enter URL: `http://localhost:1234/v1` (no API key needed).
+5. Click **Evaluate Models** in Course Studio to rank available models.
+
+**Recommended models for theological content:**
+
+- `mistral-7b-instruct` — fast, good JSON compliance
+- `llama-3.1-8b-instruct` — well-rounded
+- `qwen2.5-14b-instruct` — higher quality, slower
+
+### Ollama
+
+```bash
+# Install Ollama, then pull a model
+ollama pull llama3.1
+ollama serve       # starts on http://localhost:11434
+```
+
+In Settings, enter URL: `http://localhost:11434/v1`
+
+### OpenAI
+
+Enter URL `https://api.openai.com/v1` and your OpenAI API key. Recommended models: `gpt-4o` (best quality) or `gpt-4o-mini` (faster, lower cost).
+
+### OpenRouter
+
+Enter URL `https://openrouter.ai/api/v1` and your OpenRouter API key. OpenRouter provides access to hundreds of models from different providers through a single API.
+
+### Anthropic
+
+Enter URL `https://api.anthropic.com/v1` and your Anthropic API key. Recommended: `claude-sonnet-4-6` (strong reasoning, good JSON compliance).
+
+---
+
+## 11. Local Moodle with Docker
+
+The repo includes a `docker-compose.yml` that starts a full Moodle 5.x + MariaDB stack for local testing.
+
+### Start
 
 ```bash
 docker compose up -d
 ```
 
-- Moodle UI: **http://localhost:8080**
-- Default admin credentials: `admin` / `Admin@1234` (set during first-run wizard)
-- MariaDB is on port `3306` (mapped to host)
+Moodle will be available at **<http://localhost:8080>** once the containers are healthy (typically 2–3 minutes on first start).
 
 ### First-time Moodle setup
 
-1. Open `http://localhost:8080` and complete the installation wizard.
-2. When prompted for the database, use:
-   - Host: `mariadb`
-   - Database: `moodle`
-   - User: `moodle`
-   - Password: `moodle`
-3. Enable web services (see [Section 7](#7-moodle-sync-live-push)).
-4. In the app **Settings**, set Moodle URL to `http://localhost:8080`.
+1. Open <http://localhost:8080> and complete the installation wizard.
+2. Default database credentials (already configured in `docker-compose.yml`):
+   - Host: `db`, User: `moodle`, Password: `moodle`, Database: `moodle`
+3. Create an admin account when prompted.
+4. After setup, generate a webservice token (see [Section 9](#9-moodle-integration)) and add it in Settings.
 
-### Enable cron (required for async restores)
-
-If you use async restore (uploading through the Moodle UI), cron must be running:
+### Stop
 
 ```bash
-docker exec -it <moodle-container-name> bash
-echo '*/5 * * * * www-data php /var/www/html/admin/cli/cron.php > /dev/null 2>&1' \
-  > /etc/cron.d/moodle
-service cron start
-```
-
-Alternatively, run the restore synchronously from the CLI:
-
-```bash
-docker exec <moodle-container-name> \
-  php /var/www/html/admin/cli/restore_backup.php \
-  --file=/path/to/course.mbz --categoryid=1
+docker compose down          # stops containers, keeps data
+docker compose down -v       # stops and deletes all data (clean slate)
 ```
 
 ---
 
-## 9. LLM Server Setup
+## 12. Troubleshooting
 
-### LM Studio
+### "No models found" in Course Studio
 
-1. Download from [lmstudio.ai](https://lmstudio.ai).
-2. Load a model (7B–13B Qwen or Llama recommended for Spanish theological content).
-3. Go to **Local Server** tab → **Start Server**.
-4. Copy the base URL shown (e.g., `http://localhost:1234/v1`).
-5. Paste it in the app **Settings → LLM Server URL**.
+- Verify your LLM server is running and the URL in Settings is correct.
+- For LM Studio, make sure the server is started (green indicator in the Local Server tab).
+- Click **Evaluate Models** — if the request times out, increase LM Studio's request timeout.
 
-**Recommended models (multilingual, Spanish-capable):**
-- `Qwen2.5-7B-Instruct` (excellent Spanish, fast)
-- `Qwen2.5-14B-Instruct` (higher quality, slower)
-- `Llama-3.1-8B-Instruct`
+### Generation fails with a JSON error
 
-### Ollama
+The LLM returned malformed JSON. Try:
 
-```bash
-# Install: https://ollama.com
-ollama pull qwen2.5:7b
-ollama serve   # starts on http://localhost:11434
-```
+- Switching to a model with better instruction-following (higher score in evaluation).
+- Lowering the temperature — well-rated models at temperature 0.4–0.6 produce more reliable JSON.
+- Reducing prompt complexity or shortening it.
 
-Set LLM Server URL to `http://localhost:11434/v1` in Settings.
+### Moodle token "access denied"
 
-### Remote LLM server (LAN)
+- Confirm the token has the required webservice functions enabled.
+- Ensure the token user has the **manager** or **administrator** role.
+- Check that the Moodle webservice protocol is enabled: **Site administration → Plugins → Web services → Manage protocols → REST**.
 
-If your LLM server runs on another machine (e.g., a GPU workstation), use its LAN IP:
+### .mbz import fails in Moodle
 
-```
-http://192.168.1.100:1234/v1
-```
+- The `.mbz` file is a ZIP archive. If Moodle rejects it, open it with any ZIP tool and inspect the contents — `moodle_backup.xml` should be present at the root.
+- Ensure you are restoring to a Moodle 5.x site; older versions may reject the backup format.
 
-Make sure the server is bound to `0.0.0.0` (not just `127.0.0.1`).
+### Frontend shows a blank page
 
----
+- Check that `app/frontend/dist/` exists — run `cd app/frontend && npm run build` if it is missing.
+- In development mode, make sure both the backend (`:8000`) and the Vite dev server (`:5173`) are running.
 
-## 10. Troubleshooting
+### Database errors on startup
 
-### "No models found"
-
-- Confirm the LLM server is running and the URL is correct in Settings.
-- Check that the server exposes `/v1/models` (LM Studio and Ollama both do).
-- Verify there are no firewall rules blocking the port.
-
-### "Generation failed — Internal Server Error"
-
-- Check `/tmp/moodle_backend.log` for the Python traceback.
-- The most common cause is the LLM returning malformed JSON. Try a different (higher-quality) model.
-- Increase the model's context window if content is being truncated.
-
-### Moodle restore fails with "unexpected_grade_item_type"
-
-This is fixed in v0.1.0. If you have an older `.mbz`, rebuild it — the new `gradebook.xml` only includes `itemtype=course`.
-
-### "Moodle unreachable"
-
-- Confirm the Moodle URL includes `http://` or `https://`.
-- If running Moodle in Docker, use `http://localhost:8080` from the host (not the container IP).
-- Run `php admin/cli/purge_caches.php` inside the container if settings were recently changed.
-
-### Restore stuck / never finishes
-
-Moodle async restores require cron. Check: **Site administration → Server → Tasks → Scheduled tasks → Cron task**. If cron is not running, use the synchronous CLI restore (see [Section 8](#8-local-moodle-with-docker)).
-
-### Frontend shows blank page after build
-
-Run `npm run build` again inside `app/frontend/`. If TypeScript errors appear, fix them first — the build will not output partial files.
-
----
-
-## Contributing
-
-Pull requests are welcome. Please open an issue first to discuss major changes.
-
-## License
-
-[MIT](../LICENSE) © 2026 Ricardo Julia
+The SQLite database is created automatically at `app/library.db`. If it becomes corrupted, stop the server, delete `app/library.db`, and restart — the schema will be recreated. Your generated `.mbz` files in `app/builds/` are unaffected.
