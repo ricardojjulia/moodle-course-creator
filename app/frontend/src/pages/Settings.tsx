@@ -3,7 +3,7 @@ import {
   Stack, TextInput, PasswordInput, Button, Group,
   Title, Text, Alert, Badge, Paper, Loader,
   ActionIcon, Tooltip, ThemeIcon, SimpleGrid, Progress,
-  Box, Divider, Select, Collapse,
+  Box, Divider, Select, Collapse, CopyButton, Code,
 } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'
@@ -14,9 +14,9 @@ import {
   IconEyeOff, IconShield, IconDeviceMobile,
   IconApi, IconRefresh, IconSchool, IconRobot,
   IconBrain, IconServer, IconExternalLink,
-  IconClock, IconCalendarEvent,
+  IconClock, IconCalendarEvent, IconLock, IconLockOpen, IconCopy,
 } from '@tabler/icons-react'
-import { api, type AppSettings, type MoodleInstance, type MoodleStats, type ReviewSchedule } from '../api/client'
+import { api, type AppSettings, type MoodleInstance, type MoodleStats, type ReviewSchedule, tokenStore } from '../api/client'
 
 // ── LLM provider presets ──────────────────────────────────────────────────────
 
@@ -879,6 +879,8 @@ export default function SettingsPage() {
         </Paper>
 
         <ScheduledReviewsSection defaultModel={lastModel} />
+
+        <SecuritySection />
       </Stack>
 
       {/* ── Site Overview (right column, fills remaining width) ───────── */}
@@ -888,5 +890,151 @@ export default function SettingsPage() {
         </Box>
       )}
     </Group>
+  )
+}
+
+
+// ── Security Section ──────────────────────────────────────────────────────────
+
+function SecuritySection() {
+  const [enabled, setEnabled]         = useState(false)
+  const [loading, setLoading]         = useState(true)
+  const [newToken, setNewToken]       = useState<string | null>(null)
+  const [busy, setBusy]               = useState(false)
+  const [customToken, setCustomToken] = useState('')
+  const [showCustom, setShowCustom]   = useState(false)
+
+  useEffect(() => {
+    api.auth.status()
+      .then(s => setEnabled(s.enabled))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const generate = async () => {
+    setBusy(true)
+    try {
+      const r = await api.auth.generate()
+      setNewToken(r.token)
+      tokenStore.set(r.token)
+      setEnabled(true)
+      notifications.show({ color: 'green', message: 'New token generated and saved' })
+    } catch (e: unknown) {
+      notifications.show({ color: 'red', message: String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveCustom = async () => {
+    if (!customToken.trim()) return
+    setBusy(true)
+    try {
+      await api.auth.setToken(customToken.trim())
+      tokenStore.set(customToken.trim())
+      setEnabled(true)
+      setShowCustom(false)
+      setCustomToken('')
+      notifications.show({ color: 'green', message: 'Token saved' })
+    } catch (e: unknown) {
+      notifications.show({ color: 'red', message: String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disableAuth = async () => {
+    setBusy(true)
+    try {
+      await api.auth.clear()
+      tokenStore.clear()
+      setEnabled(false)
+      setNewToken(null)
+      notifications.show({ color: 'yellow', message: 'Authentication disabled' })
+    } catch (e: unknown) {
+      notifications.show({ color: 'red', message: String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (loading) return <Loader size="xs" />
+
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group mb="sm" gap="xs">
+        {enabled ? <IconLock size={16} color="var(--mantine-color-green-6)" /> : <IconLockOpen size={16} color="var(--mantine-color-gray-5)" />}
+        <Title order={5}>Security</Title>
+        <Badge color={enabled ? 'green' : 'gray'} variant="light" size="sm">
+          {enabled ? 'Auth enabled' : 'No auth'}
+        </Badge>
+      </Group>
+
+      <Text size="xs" c="dimmed" mb="md">
+        When a token is set, every API request must include it as a Bearer token.
+        The app will prompt for the token on first load. Leave disabled for local-only use.
+      </Text>
+
+      <Stack gap="sm">
+        {newToken && (
+          <Alert color="green" icon={<IconCheck size={14} />} title="New token — copy it now">
+            <Code block style={{ wordBreak: 'break-all', fontSize: 12 }}>{newToken}</Code>
+            <CopyButton value={newToken}>
+              {({ copied, copy }) => (
+                <Button
+                  mt="xs" size="xs" leftSection={<IconCopy size={12} />}
+                  color={copied ? 'teal' : 'green'} variant="light"
+                  onClick={copy}
+                >
+                  {copied ? 'Copied!' : 'Copy token'}
+                </Button>
+              )}
+            </CopyButton>
+          </Alert>
+        )}
+
+        <Group>
+          <Button
+            size="xs" leftSection={busy ? <Loader size="xs" /> : <IconRefresh size={14} />}
+            onClick={generate} loading={busy} variant="filled" color="blue"
+          >
+            {enabled ? 'Rotate token' : 'Enable auth (generate token)'}
+          </Button>
+
+          <Button
+            size="xs" variant="light" color="gray"
+            leftSection={<IconApi size={14} />}
+            onClick={() => setShowCustom(v => !v)}
+          >
+            Set custom token
+          </Button>
+
+          {enabled && (
+            <Button
+              size="xs" variant="subtle" color="red"
+              leftSection={<IconLockOpen size={14} />}
+              onClick={disableAuth} loading={busy}
+            >
+              Disable auth
+            </Button>
+          )}
+        </Group>
+
+        {showCustom && (
+          <Group align="flex-end">
+            <PasswordInput
+              style={{ flex: 1 }}
+              label="Custom token"
+              placeholder="Paste your token"
+              value={customToken}
+              onChange={e => setCustomToken(e.currentTarget.value)}
+            />
+            <Button size="sm" onClick={saveCustom} loading={busy} disabled={!customToken.trim()}>
+              Save
+            </Button>
+          </Group>
+        )}
+      </Stack>
+    </Paper>
   )
 }

@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import tarfile
+import threading
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
@@ -26,12 +27,15 @@ from ..database import (
     save_review, list_reviews, list_recent_reviews, delete_review,
     save_schedule, list_schedules, delete_schedule,
     get_overdue_schedules, update_schedule_run,
+    save_curriculum_eval, get_curriculum_eval, list_curriculum_evals,
 )
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 BUILD_DIR = Path(__file__).parent.parent.parent / "builds"
 BUILD_DIR.mkdir(exist_ok=True)
+
+_review_lock = threading.Lock()
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -55,6 +59,8 @@ class GenerateIn(BaseModel):
     model_id: str
     num_questions: int = 50
     homework_spec: dict[str, str] = {}   # {"1": "assign", "3": "forum"}
+    module_count:  int = 5               # 3–12 modules
+    language:      str = "es"            # ISO 639-1 language code
 
 
 class ImportVersionIn(BaseModel):
@@ -1277,96 +1283,319 @@ def export_html(shortname: str, version_id: int):
     return HTMLResponse(content=page)
 
 
-# ── Curriculum mapper ─────────────────────────────────────────────────────────
+@router.get("/{shortname}/versions/{version_id}/export-docx")
+def export_docx(shortname: str, version_id: int):
+    from fastapi.responses import Response
+    try:
+        from docx import Document
+        from docx.shared import Pt, Inches, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError:
+        raise HTTPException(500, "python-docx not installed — run: pip install python-docx")
 
-_THEOLOGICAL_DOMAINS: dict[str, list[str]] = {
-    "Old Testament": [
-        "old testament", "antiguo testamento", "genesis", "génesis", "exodus",
-        "leviticus", "numbers", "deuteronomy", "joshua", "judges", "samuel",
-        "kings", "reyes", "chronicles", "ezra", "nehemiah", "psalms", "salmos",
-        "proverbs", "proverbios", "isaiah", "isaías", "jeremiah", "jeremías",
-        "ezekiel", "ezequiel", "daniel", "pentateuco", "profetas", "sabiduría",
-    ],
-    "New Testament": [
-        "new testament", "nuevo testamento", "matthew", "mateo", "mark",
-        "marcos", "luke", "lucas", "john", "juan", "acts", "hechos", "romans",
-        "romanos", "corinthians", "corintios", "galatians", "gálatas",
-        "ephesians", "efesios", "philippians", "filipenses", "revelation",
-        "apocalipsis", "evangelios", "epístolas", "epistles",
-    ],
-    "Systematic Theology": [
-        "theology", "teología", "doctrine", "doctrina", "systematic",
-        "sistemática", "hermeneutics", "hermenéutica", "pneumatology",
-        "pneumatología", "soteriology", "soteriología", "eschatology",
-        "escatología", "christology", "cristología", "ecclesiology",
-        "eclesiología", "trinity", "trinidad", "apologetics", "apologética",
-    ],
-    "Church History": [
-        "church history", "historia de la iglesia", "reformation", "reforma",
-        "patristics", "patrística", "council", "concilio", "apostolic",
-        "apostólico", "medieval", "reformadores", "ancient church", "early church",
-    ],
-    "Pastoral Ministry": [
-        "pastoral", "ministry", "ministerio", "preaching", "predicación",
-        "homiletics", "homilética", "counseling", "consejería", "leadership",
-        "liderazgo", "discipleship", "discipulado", "worship", "adoración",
-        "church planting", "plantación de iglesias",
-    ],
-    "Biblical Languages": [
-        "greek", "griego", "hebrew", "hebreo", "aramaic", "arameo",
-        "linguistics", "lingüística", "lexicon", "léxico", "syntax", "sintaxis",
-        "biblical language", "idioma bíblico",
-    ],
-    "Ethics": [
-        "ethics", "ética", "moral", "morality", "moralidad", "justice",
-        "justicia", "bioethics", "bioética", "social", "virtues", "virtudes",
-        "values", "valores",
-    ],
-    "Missions & Evangelism": [
-        "missions", "misiones", "evangelism", "evangelismo", "missiology",
-        "misiología", "cross-cultural", "intercultural", "church growth",
-        "crecimiento de la iglesia",
-    ],
-}
+    v = get_version(version_id)
+    if not v or v["shortname"] != shortname:
+        raise HTTPException(404, "Version not found")
+    course = get_course(shortname)
+    if not course:
+        raise HTTPException(404, "Course not found")
+
+    content   = v["content"]
+    structure = content.get("course_structure", {})
+    modules   = structure.get("modules", [])
+    mc_list   = content.get("module_contents", [])
+    syllabus  = content.get("syllabus", {})
+    questions = content.get("quiz_questions", [])
+
+    doc = Document()
+
+    # Title
+    title = doc.add_heading(course["fullname"], 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Metadata table
+    meta = doc.add_table(rows=4, cols=2)
+    meta.style = "Table Grid"
+    for i, (label, value) in enumerate([
+        ("Course Code", shortname),
+        ("Professor",   course.get("professor", "")),
+        ("Category",    course.get("category", "")),
+        ("Version",     str(v.get("version_num", 1))),
+    ]):
+        row = meta.rows[i]
+        row.cells[0].text = label
+        row.cells[1].text = value
+    doc.add_paragraph()
+
+    # Course summary
+    summary = structure.get("course_summary", "")
+    if summary:
+        doc.add_heading("Course Overview", level=1)
+        doc.add_paragraph(_strip_html(summary))
+
+    # Syllabus
+    if syllabus:
+        doc.add_heading("Syllabus", level=1)
+        for field, val in syllabus.items():
+            if val:
+                doc.add_heading(field.replace("_", " ").title(), level=2)
+                doc.add_paragraph(_strip_html(str(val)))
+
+    # Modules
+    doc.add_heading("Course Modules", level=1)
+    for i, mod in enumerate(modules):
+        mc = mc_list[i] if i < len(mc_list) else {}
+        doc.add_heading(mod.get("title", f"Module {i+1}"), level=2)
+
+        obj = mod.get("objective", "")
+        if obj:
+            p = doc.add_paragraph()
+            p.add_run("Objective: ").bold = True
+            p.add_run(obj)
+
+        topics = mod.get("key_topics", [])
+        if topics:
+            p = doc.add_paragraph()
+            p.add_run("Key Topics: ").bold = True
+            p.add_run(", ".join(topics))
+
+        # Lecture content
+        for sec in mc.get("sections", []):
+            doc.add_heading(sec.get("heading", ""), level=3)
+            doc.add_paragraph(_strip_html(sec.get("text", "")))
+
+        # Discussion question
+        dq = mc.get("forum_question", mc.get("discussion_question", ""))
+        if dq:
+            p = doc.add_paragraph()
+            p.add_run("Discussion: ").bold = True
+            p.add_run(_strip_html(dq))
+
+        # Glossary
+        glossary = mc.get("glossary", [])
+        if glossary:
+            doc.add_heading("Glossary", level=3)
+            for item in glossary:
+                if isinstance(item, dict):
+                    p = doc.add_paragraph(style="List Bullet")
+                    p.add_run(f"{item.get('term', '')}: ").bold = True
+                    p.add_run(item.get("definition", ""))
+                elif isinstance(item, str):
+                    doc.add_paragraph(item, style="List Bullet")
+
+    # Quiz bank
+    if questions:
+        doc.add_heading("Quiz Bank", level=1)
+        for idx, q in enumerate(questions, 1):
+            doc.add_heading(f"Q{idx}. {_strip_html(q.get('question', ''))}", level=3)
+            for opt in q.get("options", []):
+                is_correct = opt == q.get("answer", "")
+                p = doc.add_paragraph(style="List Bullet")
+                run = p.add_run(f"{'✓ ' if is_correct else ''}{_strip_html(opt)}")
+                if is_correct:
+                    run.bold = True
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    filename = f"{shortname}_v{v['version_num']}.docx"
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Curriculum mapper (AI-based) ──────────────────────────────────────────────
+
+_CURRICULUM_DOMAINS = [
+    "Old Testament",
+    "New Testament",
+    "Systematic Theology",
+    "Church History",
+    "Pastoral Ministry",
+    "Biblical Languages",
+    "Ethics",
+    "Missions & Evangelism",
+]
+
+_CURRICULUM_EVAL_PROMPT = """You are a seminary curriculum analyst with deep expertise in theological education.
+Evaluate the course below and assign a score from 0 to 100 for each theological domain.
+
+Scoring guide:
+  0     — domain not covered at all
+  1-25  — brief or incidental mention
+  26-50 — some coverage, secondary topic
+  51-75 — significant coverage, important component of the course
+  76-100 — primary focus of the course
+
+Important: Course content may be in English, Spanish, or both. Recognize equivalent terms in both languages
+(e.g., "Antiguo Testamento" = Old Testament, "Misiones" = Missions & Evangelism, "Teología" = Systematic Theology, etc.).
+
+Domains to score:
+  Old Testament, New Testament, Systematic Theology, Church History,
+  Pastoral Ministry, Biblical Languages, Ethics, Missions & Evangelism
+
+Respond with ONLY valid JSON, no markdown, no explanation outside the JSON:
+{
+  "scores": {
+    "Old Testament": <0-100>,
+    "New Testament": <0-100>,
+    "Systematic Theology": <0-100>,
+    "Church History": <0-100>,
+    "Pastoral Ministry": <0-100>,
+    "Biblical Languages": <0-100>,
+    "Ethics": <0-100>,
+    "Missions & Evangelism": <0-100>
+  },
+  "reasoning": "<2-3 sentences explaining the main scores>"
+}"""
+
+
+def _build_course_text_for_eval(course: dict, version: dict) -> str:
+    """Build a concise course summary for AI evaluation (keeps tokens reasonable)."""
+    content  = version.get("content", {})
+    modules  = content.get("course_structure", {}).get("modules", [])
+    mcs      = content.get("module_contents", [])
+    syllabus = content.get("syllabus", {})
+
+    lines = [
+        f"Course: {course.get('fullname', '')} ({course.get('shortname', '')})",
+        f"Category: {course.get('category', '')}",
+        f"Prompt/Description: {course.get('prompt', '')}",
+    ]
+    summary = content.get("course_structure", {}).get("course_summary", "")
+    if summary:
+        lines.append(f"Summary: {_strip_html(summary)[:500]}")
+
+    if syllabus:
+        syl_text = " | ".join(f"{k}: {str(v)[:120]}" for k, v in syllabus.items() if v)
+        lines.append(f"Syllabus: {syl_text[:600]}")
+
+    for i, mod in enumerate(modules[:12]):
+        parts = [mod.get("title", ""), mod.get("objective", "")]
+        parts += mod.get("key_topics", [])
+        mc = mcs[i] if i < len(mcs) else {}
+        dq = mc.get("forum_question", mc.get("discussion_question", ""))
+        if dq:
+            parts.append(f"Discussion: {_strip_html(dq)[:120]}")
+        glossary = mc.get("glossary", [])
+        terms = [g.get("term", "") if isinstance(g, dict) else str(g) for g in glossary[:6]]
+        if terms:
+            parts.append(f"Terms: {', '.join(terms)}")
+        lines.append(f"Module {i+1}: {' | '.join(p for p in parts if p)}")
+
+    return "\n".join(lines)
+
+
+def _run_curriculum_eval(shortname: str, version_id: int | None = None):
+    """Call LLM to evaluate a course's curriculum domain scores and persist result."""
+    course = get_course(shortname)
+    if not course:
+        return
+
+    versions = list_versions(shortname)
+    if not versions:
+        return
+
+    vid = version_id or versions[0]["id"]
+    v   = get_version(vid)
+    if not v:
+        return
+
+    settings  = get_settings()
+    llm_url   = settings.get("llm_url", "")
+    api_key   = settings.get("llm_api_key", "")
+    model_id  = settings.get("last_model") or "local-model"
+
+    if not llm_url:
+        return
+
+    course_text = _build_course_text_for_eval(course, v)
+    messages = [
+        {"role": "system", "content": _CURRICULUM_EVAL_PROMPT},
+        {"role": "user",   "content": f"Evaluate this course:\n\n{course_text}"},
+    ]
+
+    try:
+        raw = cc.call_llm(
+            messages, llm_url,
+            model_id=model_id,
+            temperature=0.1,
+            max_tokens=512,
+            api_key=api_key,
+        )
+    except Exception:
+        return
+
+    result = None
+    for candidate in [raw, _extract_json_block(raw)]:
+        if not candidate:
+            continue
+        try:
+            result = json.loads(candidate)
+            break
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if not result or "scores" not in result:
+        return
+
+    scores = {d: max(0, min(100, int(result["scores"].get(d, 0)))) for d in _CURRICULUM_DOMAINS}
+    reasoning = str(result.get("reasoning", ""))
+    save_curriculum_eval(shortname, vid, model_id, scores, reasoning)
+
+
+def _schedule_curriculum_eval(shortname: str, version_id: int | None = None):
+    """Trigger curriculum evaluation in a background thread (non-blocking)."""
+    t = threading.Thread(target=_run_curriculum_eval, args=(shortname, version_id), daemon=True)
+    t.start()
+
+
+@router.post("/{shortname}/curriculum-eval")
+def evaluate_curriculum(shortname: str):
+    """Re-evaluate a course's curriculum domain scores via AI (blocking)."""
+    course = get_course(shortname)
+    if not course:
+        raise HTTPException(404, "Course not found")
+
+    settings = get_settings()
+    if not settings.get("llm_url"):
+        raise HTTPException(400, "LLM URL not configured — visit Settings.")
+
+    _run_curriculum_eval(shortname)
+    result = get_curriculum_eval(shortname)
+    if not result:
+        raise HTTPException(502, "Evaluation failed — check LLM connection and model.")
+    return result
 
 
 @router.get("/curriculum")
 def get_curriculum():
-    """Map all library courses to theological domains based on keyword analysis."""
+    """Return AI-evaluated curriculum domain coverage for all library courses."""
     courses = list_courses()
-    domain_names = list(_THEOLOGICAL_DOMAINS.keys())
+    evals   = {e["shortname"]: e for e in list_curriculum_evals()}
 
     course_data = []
     for course in courses:
         versions = list_versions(course["shortname"])
-        domains: dict[str, int] = {}
         module_count = 0
-
         if versions:
             v = get_version(versions[0]["id"])
             if v:
-                content = v.get("content", {})
-                modules = content.get("course_structure", {}).get("modules", [])
-                mcs     = content.get("module_contents", [])
-                module_count = len(modules)
+                module_count = len(v.get("content", {}).get("course_structure", {}).get("modules", []))
 
-                parts = [
-                    course["fullname"].lower(),
-                    course.get("category", "").lower(),
-                    course.get("prompt", "").lower(),
-                ]
-                for mod in modules:
-                    parts.append(mod.get("title", "").lower())
-                    parts.extend(k.lower() for k in mod.get("key_topics", []))
-                    parts.append(mod.get("objective", "").lower())
-                for mc in mcs:
-                    parts.append(mc.get("forum_question", "").lower())
-
-                all_text = " ".join(parts)
-                for domain, keywords in _THEOLOGICAL_DOMAINS.items():
-                    score = sum(1 for kw in keywords if kw in all_text)
-                    if score > 0:
-                        domains[domain] = score
+        ev = evals.get(course["shortname"])
+        if ev:
+            domains      = ev["scores"]
+            evaluated_at = ev.get("evaluated_at", "")
+            model_used   = ev.get("model_used", "")
+            eval_status  = "evaluated"
+        else:
+            domains      = {d: 0 for d in _CURRICULUM_DOMAINS}
+            evaluated_at = ""
+            model_used   = ""
+            eval_status  = "pending"
 
         course_data.append({
             "shortname":    course["shortname"],
@@ -1375,9 +1604,12 @@ def get_curriculum():
             "instance":     course.get("instance", ""),
             "module_count": module_count,
             "domains":      domains,
+            "eval_status":  eval_status,
+            "evaluated_at": evaluated_at,
+            "model_used":   model_used,
         })
 
-    return {"courses": course_data, "domains": domain_names}
+    return {"courses": course_data, "domains": _CURRICULUM_DOMAINS}
 
 
 # ── Review schedules ──────────────────────────────────────────────────────────
@@ -1398,75 +1630,85 @@ def list_review_schedules():
     return list_schedules()
 
 
-@router.post("/schedules/run-overdue")
-def run_overdue_reviews():
-    """Run all overdue scheduled reviews synchronously and return a summary."""
+def _do_run_overdue_reviews() -> dict:
+    """Run all overdue scheduled reviews. Called by the HTTP route and the background scheduler."""
     from datetime import timedelta
 
-    overdue   = get_overdue_schedules()
-    settings  = get_settings()
-    triggered = 0
-    errors: list[str] = []
+    if not _review_lock.acquire(blocking=False):
+        return {"triggered": 0, "errors": ["review run already in progress"]}
 
-    for sched in overdue:
-        shortname = sched["shortname"]
-        try:
-            vers = list_versions(shortname)
-            if not vers:
-                errors.append(f"{shortname}: no versions")
-                continue
+    try:
+        overdue   = get_overdue_schedules()
+        settings  = get_settings()
+        triggered = 0
+        errors: list[str] = []
 
-            vid = sched.get("version_id")
-            ver = get_version(int(vid)) if vid else get_version(vers[0]["id"])
-            if not ver:
-                errors.append(f"{shortname}: version not found")
-                continue
-
-            course_text = _format_for_review(shortname, ver)
-            system_msg  = sched["agent_context"] + _JSON_OUTPUT_INSTRUCTION
-            messages    = [
-                {"role": "system", "content": system_msg},
-                {"role": "user",   "content": f"Audit this course:\n\n{course_text}"},
-            ]
-
-            raw = cc.call_llm(
-                messages,
-                settings.get("llm_url", ""),
-                model_id=sched.get("model_id") or "local-model",
-                temperature=0.2,
-                max_tokens=2048,
-                api_key=settings.get("llm_api_key", ""),
-            )
-
-            result = None
-            for candidate in [raw, _extract_json_block(raw)]:
-                if not candidate:
+        for sched in overdue:
+            shortname = sched["shortname"]
+            try:
+                vers = list_versions(shortname)
+                if not vers:
+                    errors.append(f"{shortname}: no versions")
                     continue
-                try:
-                    result = json.loads(candidate)
-                    break
-                except Exception:
-                    pass
 
-            if result is None:
-                errors.append(f"{shortname}: LLM returned non-JSON")
-                continue
+                vid = sched.get("version_id")
+                ver = get_version(int(vid)) if vid else get_version(vers[0]["id"])
+                if not ver:
+                    errors.append(f"{shortname}: version not found")
+                    continue
 
-            response = {"shortname": shortname, "version_num": ver.get("version_num"), **result}
-            save_review(shortname, ver.get("id"), ver.get("version_num"),
-                        sched["agent_id"], sched["agent_label"], sched["agent_color"], response)
+                course_text = _format_for_review(shortname, ver)
+                system_msg  = sched["agent_context"] + _JSON_OUTPUT_INSTRUCTION
+                messages    = [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": f"Audit this course:\n\n{course_text}"},
+                ]
 
-            freq_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(
-                sched.get("frequency", "weekly"), 7)
-            now_str  = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            next_run = (datetime.utcnow() + timedelta(days=freq_days)).strftime("%Y-%m-%d %H:%M:%S")
-            update_schedule_run(sched["id"], now_str, next_run)
-            triggered += 1
+                raw = cc.call_llm(
+                    messages,
+                    settings.get("llm_url", ""),
+                    model_id=sched.get("model_id") or "local-model",
+                    temperature=0.2,
+                    max_tokens=2048,
+                    api_key=settings.get("llm_api_key", ""),
+                )
 
-        except Exception as e:
-            errors.append(f"{shortname}: {e}")
+                result = None
+                for candidate in [raw, _extract_json_block(raw)]:
+                    if not candidate:
+                        continue
+                    try:
+                        result = json.loads(candidate)
+                        break
+                    except Exception:
+                        pass
 
-    return {"triggered": triggered, "errors": errors}
+                if result is None:
+                    errors.append(f"{shortname}: LLM returned non-JSON")
+                    continue
+
+                response = {"shortname": shortname, "version_num": ver.get("version_num"), **result}
+                save_review(shortname, ver.get("id"), ver.get("version_num"),
+                            sched["agent_id"], sched["agent_label"], sched["agent_color"], response)
+
+                freq_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(
+                    sched.get("frequency", "weekly"), 7)
+                now_str  = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                next_run = (datetime.utcnow() + timedelta(days=freq_days)).strftime("%Y-%m-%d %H:%M:%S")
+                update_schedule_run(sched["id"], now_str, next_run)
+                triggered += 1
+
+            except Exception as e:
+                errors.append(f"{shortname}: {e}")
+
+        return {"triggered": triggered, "errors": errors}
+    finally:
+        _review_lock.release()
+
+
+@router.post("/schedules/run-overdue")
+def run_overdue_reviews():
+    return _do_run_overdue_reviews()
 
 
 @router.post("/schedules")
@@ -1552,8 +1794,10 @@ def import_version(shortname: str, body: ImportVersionIn):
     """Save an existing content dict as a new version (no LLM needed)."""
     upsert_course(shortname, body.fullname, body.professor,
                   body.category, "", instance="Local")
-    return save_version(shortname, body.model_used,
-                        body.start_date, body.end_date, body.content)
+    version = save_version(shortname, body.model_used,
+                           body.start_date, body.end_date, body.content)
+    _schedule_curriculum_eval(shortname, version["id"])
+    return version
 
 
 # ── Bulk delete ───────────────────────────────────────────────────────────────
@@ -1599,6 +1843,7 @@ def import_mbz_from_url(body: ImportMbzIn):
         parsed["start_date"], parsed["end_date"],
         parsed["content"],
     )
+    _schedule_curriculum_eval(shortname, version["id"])
     return version
 
 
@@ -1694,6 +1939,7 @@ async def upload_mbz_file(file: UploadFile = File(...)):
         parsed["start_date"], parsed["end_date"],
         parsed["content"],
     )
+    _schedule_curriculum_eval(shortname, version["id"])
     return version
 
 
@@ -1814,9 +2060,13 @@ def generate_course(body: GenerateIn):
     end_dt   = (datetime.strptime(body.end_date, "%Y-%m-%d")
                 if body.end_date else start_dt + timedelta(weeks=8))
 
+    num_modules = max(3, min(12, body.module_count))
+    language    = body.language or "es"
+
     # Step 1 — course structure
     course_structure = cc.generate_course_structure(
-        body.shortname, body.fullname, body.prompt, llm_url, body.model_id, api_key=api_key)
+        body.shortname, body.fullname, body.prompt, llm_url, body.model_id, api_key=api_key,
+        num_modules=num_modules, language=language)
     modules = course_structure["modules"]
 
     # Step 2 — module content
@@ -1825,7 +2075,7 @@ def generate_course(body: GenerateIn):
         mc = cc.generate_module_content(
             m["number"], m["title"], m["objective"],
             m.get("key_topics", []), body.fullname, body.professor,
-            llm_url, body.model_id, api_key=api_key)
+            llm_url, body.model_id, api_key=api_key, language=language)
         # Normalise to the same shape as .mbz imports so the UI viewer works
         module_contents.append({
             **mc,
@@ -1838,18 +2088,20 @@ def generate_course(body: GenerateIn):
     # Step 3 — syllabus
     syllabus = cc.generate_syllabus(
         body.fullname, body.shortname, body.professor,
-        modules, llm_url, body.model_id, api_key=api_key)
+        modules, llm_url, body.model_id, api_key=api_key, language=language)
 
     # Step 4 — quiz questions
     quiz_questions = cc.generate_quiz_questions(
-        body.fullname, modules, body.num_questions, llm_url, body.model_id, api_key=api_key)
+        body.fullname, modules, body.num_questions, llm_url, body.model_id, api_key=api_key,
+        language=language)
 
     # Step 5 — homework prompts (if requested)
     hw_spec = {int(k): v for k, v in body.homework_spec.items()}
     homework_prompts = {}
     if hw_spec:
         homework_prompts = cc.generate_homework_prompts(
-            body.fullname, modules, hw_spec, llm_url, body.model_id, api_key=api_key)
+            body.fullname, modules, hw_spec, llm_url, body.model_id, api_key=api_key,
+            language=language)
 
     content = {
         "course_structure":  course_structure,
@@ -1864,6 +2116,7 @@ def generate_course(body: GenerateIn):
                   body.category, body.prompt, instance="Local")
     version = save_version(body.shortname, body.model_id,
                            body.start_date, body.end_date, content)
+    _schedule_curriculum_eval(body.shortname, version["id"])
     return version
 
 

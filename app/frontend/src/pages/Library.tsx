@@ -13,8 +13,8 @@ import {
   IconChevronDown, IconChevronRight, IconUpload,
   IconCloudUpload, IconExternalLink,
   IconBook2, IconCategory, IconClock, IconGitBranch,
-  IconStack, IconSearch, IconGitCompare, IconPrinter,
-  IconChartBar, IconArrowUp, IconArrowDown, IconMinus,
+  IconStack, IconSearch, IconGitCompare, IconPrinter, IconFileWord,
+  IconChartBar, IconArrowUp, IconArrowDown, IconMinus, IconBrain,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion, type InstanceStats, type PersistedReview, type MoodleDeploy } from '../api/client'
@@ -320,7 +320,8 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
   const [deploys,       setDeploys]       = useState<MoodleDeploy[]>([])
   const [allReviews,    setAllReviews]    = useState<PersistedReview[]>([])
   const [progressOpen,  setProgressOpen]  = useState(false)
-  const [diffOpen,      setDiffOpen]      = useState(false)
+  const [diffOpen,           setDiffOpen]           = useState(false)
+  const [evalingCurriculum,  setEvalingCurriculum]  = useState(false)
 
   // Deploy to Moodle
   const [deployOpen,       setDeployOpen]       = useState(false)
@@ -369,6 +370,18 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       notifications.show({ title: 'Deploy failed', message: e.message, color: 'red' })
     } finally {
       setDeploying(false)
+    }
+  }
+
+  const handleEvaluateCurriculum = async () => {
+    setEvalingCurriculum(true)
+    try {
+      await api.evaluateCurriculum(course.shortname)
+      notifications.show({ title: 'Curriculum evaluated', message: `${course.shortname} scored across all domains`, color: 'teal' })
+    } catch (e: any) {
+      notifications.show({ title: 'Evaluation failed', message: e.message, color: 'red' })
+    } finally {
+      setEvalingCurriculum(false)
     }
   }
 
@@ -549,6 +562,16 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <IconPrinter size={14} />
                     </ActionIcon>
                   </Tooltip>
+                  <Tooltip label="Export Word (.docx)">
+                    <ActionIcon
+                      size="sm" variant="light" color="indigo"
+                      component="a"
+                      href={api.courses.exportDocxUrl(course.shortname, selectedVersion.id)}
+                      download
+                    >
+                      <IconFileWord size={14} />
+                    </ActionIcon>
+                  </Tooltip>
                   {versions.length >= 2 && (
                     <Tooltip label="Compare versions">
                       <ActionIcon size="sm" variant="light" color="violet"
@@ -557,6 +580,13 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       </ActionIcon>
                     </Tooltip>
                   )}
+                  <Tooltip label="Re-evaluate Curriculum (AI)">
+                    <ActionIcon size="sm" variant="light" color="teal"
+                                loading={evalingCurriculum}
+                                onClick={handleEvaluateCurriculum}>
+                      <IconBrain size={14} />
+                    </ActionIcon>
+                  </Tooltip>
                   <Tooltip label="Deploy to Moodle">
                     <ActionIcon size="sm" variant="light" color="blue"
                                 onClick={() => openDeploy(selectedVersion)}>

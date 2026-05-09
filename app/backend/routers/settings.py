@@ -1,6 +1,7 @@
 """App settings + named Moodle instance management."""
 
 import json
+import secrets
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -138,3 +139,48 @@ def remove_instance(name: str):
     if get_settings().get("active_instance") == name:
         set_setting("active_instance", "")
     return {"ok": True}
+
+
+# ── Auth endpoints ─────────────────────────────────────────────────────────────
+
+class TokenIn(BaseModel):
+    token: str = ""
+
+
+@router.get("/auth/status")
+def auth_status():
+    """Return whether a token is configured (never returns the token itself)."""
+    token = get_settings().get("auth_token", "")
+    return {"enabled": bool(token)}
+
+
+@router.get("/auth/verify")
+def auth_verify():
+    """Return 200 if the caller's Authorization header is valid (checked by middleware)."""
+    return {"ok": True}
+
+
+@router.post("/auth/token")
+def set_auth_token(body: TokenIn):
+    """Set or replace the auth token. Pass an empty string to disable auth."""
+    token = body.token.strip()
+    if not token:
+        set_setting("auth_token", "")
+        return {"ok": True, "enabled": False}
+    set_setting("auth_token", token)
+    return {"ok": True, "enabled": True}
+
+
+@router.post("/auth/token/generate")
+def generate_auth_token():
+    """Generate a secure random token and save it."""
+    token = secrets.token_urlsafe(32)
+    set_setting("auth_token", token)
+    return {"ok": True, "token": token, "enabled": True}
+
+
+@router.delete("/auth/token")
+def clear_auth_token():
+    """Remove the auth token, disabling authentication."""
+    set_setting("auth_token", "")
+    return {"ok": True, "enabled": False}

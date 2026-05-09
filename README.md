@@ -23,10 +23,13 @@ Designed for theological colleges, seminaries, and any institution that needs to
 
 ### AI Course Generation
 
-- **Full pipeline in one click** — course structure → 5 modules → syllabus → quiz bank → optional homework
+- **Full pipeline in one click** — course structure → modules → syllabus → quiz bank → optional homework
+- **Configurable module count** — choose 3–12 modules per course
+- **Multi-language generation** — Spanish, English, Portuguese, French, German
 - **Any LLM, any provider** — LM Studio, Ollama, OpenAI, OpenRouter, Anthropic — provider auto-detected from URL
 - **Model evaluation** — benchmarks every locally-available model on a test prompt, scores and ranks them by accuracy, speed, and JSON validity
 - **Homework configurator** — per-module toggle to add Assignment or Forum activities with LLM-written prompts
+- **First-run wizard** — guided setup on first launch if no LLM URL is configured
 
 ### Course Library
 
@@ -38,6 +41,7 @@ Designed for theological colleges, seminaries, and any institution that needs to
 - **Build & download** — compile any version to a valid `.mbz` on demand
 - **Import from `.mbz`** — upload or import-from-URL any Moodle backup file into your library
 - **HTML export** — export any version to a print-ready HTML page
+- **Word export** — download any version as a formatted `.docx` file
 
 ### Quality Assurance
 
@@ -58,13 +62,29 @@ Designed for theological colleges, seminaries, and any institution that needs to
 - **Batch import** — select multiple live Moodle courses and import them all into your library in one operation
 - **REST API proxy** — update course metadata, section summaries, and forum discussions without leaving the app
 - **Student Analytics** — per-course enrollment stats, grade distribution (A/B/C/D/F), pass rate, and per-quiz performance; weak-area detection
-- **Curriculum Map** — visual matrix showing theological domain coverage across your entire course library
+
+### Curriculum Map
+
+- **AI-scored domain coverage** — each course is evaluated by the best available LLM and scored 0–100 against eight theological domains: Old Testament, New Testament, Systematic Theology, Church History, Pastoral Ministry, Biblical Languages, Ethics, Missions & Evangelism
+- **Bilingual evaluation** — the AI recognises equivalent terms in both English and Spanish
+- **Bulk evaluation** — select any combination of courses (or "Select pending") and evaluate them all in one run, with a live progress bar and per-row score updates as each finishes
+- **Persistent scores** — evaluations are stored in SQLite; re-evaluation is on demand from the Library or Curriculum Map
+- **Auto-eval on import** — any course added via generation, `.mbz` upload, or URL import is automatically queued for background evaluation
+- **Coverage ring** — summary ring shows what percentage of the eight domains are addressed across the library, with per-domain average scores
 
 ### Scheduled Reviews
 
 - **Auto-review scheduler** — configure courses for automatic periodic re-review (daily / weekly / monthly)
+- **Background scheduler** — APScheduler checks for overdue reviews every 15 minutes while the server is running
 - **Overdue indicator** — Settings tab shows how many scheduled reviews are past-due
 - **Run on demand** — trigger all overdue reviews with one click; results appear in each course's review history
+
+### Security
+
+- **Bearer token authentication** — optional API-level protection; all endpoints require a valid `Authorization: Bearer <token>` header when enabled
+- **Token management** — generate a secure random token or set a custom one in Settings; disable auth by clearing the token
+- **Login modal** — the frontend prompts for the token on first load if auth is enabled; the token is stored in `sessionStorage`
+- **Transparent pass-through** — auth is completely optional; if no token is configured, all requests proceed without a header check
 
 ### Site Analytics & Settings
 
@@ -109,7 +129,7 @@ Designed for theological colleges, seminaries, and any institution that needs to
 │  /api/courses  ·  /api/llm  ·  /api/moodle  ·  /api/settings                │
 │                                                                              │
 │                          SQLite  library.db                                  │
-│        courses · versions · reviews · schedules · deploys · settings        │
+│  courses · versions · reviews · schedules · deploys · curriculum_evals · settings  │
 └────────┬──────────────────────────────────────────────┬─────────────────────┘
          │                                              │
          ▼                                              ▼
@@ -253,6 +273,7 @@ Interactive docs at `http://localhost:8000/docs` when running.
 | | `PATCH /api/courses/{sn}/versions/{vid}/field` | Inline field edit |
 | | `POST /api/courses/{sn}/versions/{vid}/modules/{n}/regenerate` | Regenerate one module |
 | | `GET /api/courses/{sn}/versions/{vid}/export-html` | Print-ready HTML export |
+| | `GET /api/courses/{sn}/versions/{vid}/export-docx` | Word (.docx) export |
 | | `GET /api/courses/{sn}/versions/{vid}/bible-refs` | Validate Bible references |
 | | `PUT /api/courses/{sn}/versions/{vid}/quiz` | Save quiz question bank |
 | **Review** | `POST /api/courses/{sn}/review` | Single-course LLM audit |
@@ -264,7 +285,8 @@ Interactive docs at `http://localhost:8000/docs` when running.
 | | `POST /api/courses/schedules` | Create a new schedule |
 | | `DELETE /api/courses/schedules/{id}` | Delete a schedule |
 | | `POST /api/courses/schedules/run-overdue` | Run all past-due scheduled reviews |
-| **Curriculum** | `GET /api/courses/curriculum` | Theological domain coverage map |
+| **Curriculum** | `GET /api/courses/curriculum` | AI-scored theological domain coverage map |
+| | `POST /api/courses/{sn}/curriculum-eval` | Run AI evaluation for one course |
 | **LLM** | `GET /api/llm/models` | List available models |
 | | `GET /api/llm/evaluation` | Get cached evaluation results |
 | | `POST /api/llm/evaluate` | Run model evaluation benchmark |
@@ -280,6 +302,11 @@ Interactive docs at `http://localhost:8000/docs` when running.
 | | `GET /api/settings/instances` | List saved Moodle instances |
 | | `POST /api/settings/instances` | Add or update a Moodle instance |
 | | `POST /api/settings/instances/{name}/activate` | Set active Moodle instance |
+| **Auth** | `GET /api/auth/status` | Whether token auth is enabled |
+| | `POST /api/auth/token` | Set a custom auth token |
+| | `POST /api/auth/token/generate` | Generate a secure random token |
+| | `DELETE /api/auth/token` | Disable authentication |
+| | `GET /api/auth/verify` | Verify caller's token is valid |
 
 ---
 

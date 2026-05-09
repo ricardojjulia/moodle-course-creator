@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
   Stack, Title, TextInput, Textarea, Button, Group,
-  Paper, Text, Badge, Table, Loader, Stepper,
+  Paper, Text, Badge, Table, Loader, Stepper, Box,
   Select, NumberInput, Progress, ThemeIcon,
   SimpleGrid, Collapse, Autocomplete, ActionIcon,
   SegmentedControl, ScrollArea, NavLink,
@@ -409,9 +409,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
   const [generating, setGenerating]   = useState(false)
   const [genStep, setGenStep]         = useState(0)
   const [categories, setCategories]   = useState<string[]>([])
-  const [hwSpec, setHwSpec]           = useState<Record<number, string | null>>({
-    1: null, 2: null, 3: null, 4: null, 5: null,
-  })
+  const [hwSpec, setHwSpec]           = useState<Record<number, string | null>>({})
 
   const form = useForm<{
     shortname:     string
@@ -422,6 +420,8 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
     start_date:    Date | null
     end_date:      Date | null
     num_questions: number
+    module_count:  number
+    language:      string
   }>({
     initialValues: {
       shortname:     '',
@@ -432,6 +432,8 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
       start_date:    null,
       end_date:      null,
       num_questions: 50,
+      module_count:  5,
+      language:      'es',
     },
     validate: {
       shortname: (v: string) => v.trim() ? null : 'Required',
@@ -505,6 +507,8 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
         end_date:      toDateStr(values.end_date),
         model_id:      selectedModel,
         homework_spec: hw,
+        module_count:  values.module_count,
+        language:      values.language,
       })
       clearInterval(timer)
       setGenStep(totalSteps)
@@ -742,6 +746,26 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                       {...form.getInputProps('end_date')}
                     />
                   </Group>
+                  <Group grow>
+                    <NumberInput
+                      label="Modules"
+                      description="Number of course modules (3–12)"
+                      min={3} max={12} step={1}
+                      {...form.getInputProps('module_count')}
+                    />
+                    <Select
+                      label="Language"
+                      description="Content generation language"
+                      data={[
+                        { value: 'es', label: 'Spanish (Español)' },
+                        { value: 'en', label: 'English' },
+                        { value: 'pt', label: 'Portuguese (Português)' },
+                        { value: 'fr', label: 'French (Français)' },
+                        { value: 'de', label: 'German (Deutsch)' },
+                      ]}
+                      {...form.getInputProps('language')}
+                    />
+                  </Group>
                 </Stack>
               </Paper>
 
@@ -764,32 +788,33 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                   <div>
                     <Text size="sm" fw={500} mb={4}>Homework Modules <Text span size="xs" c="dimmed">(optional)</Text></Text>
                     <Text size="xs" c="dimmed" mb="sm">Click a module to include extra homework, then pick the activity type.</Text>
-                    <Group gap="sm" mb="xs">
-                      {([1, 2, 3, 4, 5] as const).map(n => (
+                    <Group gap="sm" mb="xs" wrap="wrap">
+                      {Array.from({ length: form.values.module_count }, (_, i) => i + 1).map(n => (
                         <Paper
                           key={n}
                           withBorder px="md" py={6} radius="xl"
+                          data-active={hwSpec[n] != null || undefined}
+                          onClick={() => setHwSpec(prev => ({ ...prev, [n]: prev[n] != null ? null : 'assign' }))}
                           style={{
-                            cursor:      'pointer',
-                            minWidth:    72,
-                            textAlign:   'center',
-                            borderColor: hwSpec[n] !== null ? 'var(--mantine-color-orange-5)' : undefined,
-                            background:  hwSpec[n] !== null ? 'var(--mantine-color-orange-light)' : undefined,
-                            userSelect:  'none',
-                            transition:  'all 0.12s',
+                            cursor: 'pointer', minWidth: 72, textAlign: 'center',
+                            userSelect: 'none', transition: 'all 0.12s',
+                            ...(hwSpec[n] != null ? {
+                              borderColor: 'var(--mantine-color-orange-5)',
+                              background: 'var(--mantine-color-orange-light)',
+                            } : {}),
                           }}
-                          onClick={() => setHwSpec(prev => ({ ...prev, [n]: prev[n] !== null ? null : 'assign' }))}
                         >
-                          <Text size="xs" fw={hwSpec[n] !== null ? 700 : 400}
-                                c={hwSpec[n] !== null ? 'orange' : 'dimmed'}>
+                          <Text size="xs" fw={hwSpec[n] != null ? 700 : 400}
+                                c={hwSpec[n] != null ? 'orange' : 'dimmed'}>
                             Mod {n}
                           </Text>
                         </Paper>
                       ))}
                     </Group>
                     {hasHomework && (
-                      <SimpleGrid cols={5} spacing="xs">
-                        {([1, 2, 3, 4, 5] as const).filter(n => hwSpec[n] !== null).map(n => (
+                      <SimpleGrid cols={Math.min(5, form.values.module_count)} spacing="xs">
+                        {Array.from({ length: form.values.module_count }, (_, i) => i + 1)
+                          .filter(n => hwSpec[n] != null).map(n => (
                           <Select
                             key={n} size="xs" label={`Mod ${n}`}
                             value={hwSpec[n]}
@@ -852,7 +877,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                         >
                           {status === 'done'    && <ThemeIcon size={16} color="green"  variant="filled" radius="xl"><IconCheck size={10} /></ThemeIcon>}
                           {status === 'running' && <Loader size={16} color="violet" />}
-                          {status === 'pending' && <div style={{ width: 16, height: 16, borderRadius: '50%', border: '1.5px solid var(--mantine-color-gray-6)', flexShrink: 0 }} />}
+                          {status === 'pending' && <Box w={16} h={16} style={{ borderRadius: '50%', border: '1.5px solid var(--mantine-color-gray-6)', flexShrink: 0 }} />}
                           <Text size="xs" fw={status === 'running' ? 700 : 400}
                                 c={status === 'done' ? 'green' : status === 'running' ? undefined : 'dimmed'}>
                             {label}

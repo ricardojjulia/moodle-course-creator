@@ -1,12 +1,28 @@
 const BASE = '/api'
 
+const TOKEN_KEY = 'mcc_auth_token'
+export const tokenStore = {
+  get: () => localStorage.getItem(TOKEN_KEY) ?? '',
+  set: (t: string) => t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const isFormData = body instanceof FormData
+  const token = tokenStore.get()
+  const headers: Record<string, string> = {}
+  if (body && !isFormData) headers['Content-Type'] = 'application/json'
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body && !isFormData ? { 'Content-Type': 'application/json' } : {},
+    headers,
     body: isFormData ? body : body ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 401) {
+    // Surface a typed error the app can catch to show the login modal
+    throw Object.assign(new Error('Unauthorized'), { status: 401 })
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail ?? res.statusText)
@@ -246,12 +262,24 @@ export interface CurriculumEntry {
   category: string
   instance: string
   module_count: number
-  domains: Record<string, number>
+  domains: Record<string, number>  // domain -> 0-100 AI score
+  eval_status: 'evaluated' | 'pending'
+  evaluated_at: string
+  model_used: string
 }
 
 export interface CurriculumMap {
   courses: CurriculumEntry[]
   domains: string[]
+}
+
+export interface CurriculumEval {
+  shortname: string
+  version_id: number | null
+  model_used: string
+  scores: Record<string, number>
+  reasoning: string
+  evaluated_at: string
 }
 
 export interface ReviewSchedule {
@@ -308,6 +336,14 @@ export const api = {
     deleteInstance:   (name: string)        => del<{ ok: boolean }>(`/settings/instances/${encodeURIComponent(name)}`),
   },
 
+  auth: {
+    status:    ()              => get<{ enabled: boolean }>('/settings/auth/status'),
+    verify:    ()              => get<{ ok: boolean }>('/settings/auth/verify'),
+    setToken:  (token: string) => post<{ ok: boolean; enabled: boolean }>('/settings/auth/token', { token }),
+    generate:  ()              => post<{ ok: boolean; token: string; enabled: boolean }>('/settings/auth/token/generate', {}),
+    clear:     ()              => del<{ ok: boolean; enabled: boolean }>('/settings/auth/token'),
+  },
+
   // ── Library ────────────────────────────────────────────────────────────────
   courses: {
     list:       ()              => get<Course[]>('/courses'),
@@ -355,6 +391,8 @@ export const api = {
               put<{ ok: boolean; count: number }>(`/courses/${encodeURIComponent(sn)}/versions/${vid}/quiz`, { questions }),
     exportHtmlUrl: (sn: string, vid: number) =>
               `${BASE}/courses/${encodeURIComponent(sn)}/versions/${vid}/export-html`,
+    exportDocxUrl: (sn: string, vid: number) =>
+              `${BASE}/courses/${encodeURIComponent(sn)}/versions/${vid}/export-docx`,
     listReviews: (sn: string, version_id?: number) =>
               get<PersistedReview[]>(`/courses/${encodeURIComponent(sn)}/reviews${version_id != null ? `?version_id=${version_id}` : ''}`),
     deleteReview: (sn: string, rid: number) =>
@@ -365,6 +403,8 @@ export const api = {
 
   // ── Curriculum mapper ────────────────────────────────────────────────────
   curriculum: () => get<CurriculumMap>('/courses/curriculum'),
+  evaluateCurriculum: (sn: string) =>
+    post<CurriculumEval>(`/courses/${encodeURIComponent(sn)}/curriculum-eval`, {}),
 
   // ── Review schedules ─────────────────────────────────────────────────────
   schedules: {

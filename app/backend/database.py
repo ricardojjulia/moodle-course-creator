@@ -108,6 +108,16 @@ def init_db():
             enabled       INTEGER NOT NULL DEFAULT 1,
             created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS curriculum_evaluations (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            shortname    TEXT    NOT NULL UNIQUE,
+            version_id   INTEGER,
+            model_used   TEXT    NOT NULL DEFAULT '',
+            scores_json  TEXT    NOT NULL DEFAULT '{}',
+            reasoning    TEXT    NOT NULL DEFAULT '',
+            evaluated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
         """)
 
     # Migrations for existing databases
@@ -139,6 +149,11 @@ def init_db():
              "next_run_at TEXT NOT NULL DEFAULT (datetime('now')), last_run_at TEXT, "
              "enabled INTEGER NOT NULL DEFAULT 1, "
              "created_at TEXT NOT NULL DEFAULT (datetime('now')))"),
+            ("CREATE TABLE IF NOT EXISTS curriculum_evaluations ("
+             "id INTEGER PRIMARY KEY AUTOINCREMENT, shortname TEXT NOT NULL UNIQUE, "
+             "version_id INTEGER, model_used TEXT NOT NULL DEFAULT '', "
+             "scores_json TEXT NOT NULL DEFAULT '{}', reasoning TEXT NOT NULL DEFAULT '', "
+             "evaluated_at TEXT NOT NULL DEFAULT (datetime('now')))"),
         ]:
             try:
                 conn.execute(stmt)
@@ -441,3 +456,43 @@ def update_schedule_run(schedule_id: int, last_run_at: str, next_run_at: str):
             "UPDATE review_schedules SET last_run_at=?, next_run_at=? WHERE id=?",
             (last_run_at, next_run_at, schedule_id),
         )
+
+
+# ── Curriculum evaluations ────────────────────────────────────────────────────
+
+def save_curriculum_eval(shortname: str, version_id: int | None, model_used: str,
+                         scores: dict, reasoning: str):
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO curriculum_evaluations"
+            "(shortname, version_id, model_used, scores_json, reasoning) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(shortname) DO UPDATE SET "
+            "version_id=excluded.version_id, model_used=excluded.model_used, "
+            "scores_json=excluded.scores_json, reasoning=excluded.reasoning, "
+            "evaluated_at=datetime('now')",
+            (shortname, version_id, model_used, json.dumps(scores), reasoning),
+        )
+
+
+def get_curriculum_eval(shortname: str) -> dict | None:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM curriculum_evaluations WHERE shortname=?", (shortname,)
+        ).fetchone()
+    if not row:
+        return None
+    r = dict(row)
+    r["scores"] = json.loads(r.get("scores_json", "{}"))
+    return r
+
+
+def list_curriculum_evals() -> list[dict]:
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM curriculum_evaluations").fetchall()
+    result = []
+    for row in rows:
+        r = dict(row)
+        r["scores"] = json.loads(r.get("scores_json", "{}"))
+        result.append(r)
+    return result

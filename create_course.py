@@ -498,43 +498,65 @@ SYS_SPANISH_JSON = (
     "Responde ÚNICAMENTE con JSON válido, sin texto adicional."
 )
 
+_LANG_SUFFIX = {
+    "es": ("Responde SIEMPRE en español. "
+           "Responde ÚNICAMENTE con JSON válido, sin texto adicional."),
+    "en": ("Always respond in English. "
+           "Respond ONLY with valid JSON, no additional text."),
+    "pt": ("Responda SEMPRE em português. "
+           "Responda APENAS com JSON válido, sem texto adicional."),
+    "fr": ("Répondez TOUJOURS en français. "
+           "Répondez UNIQUEMENT avec du JSON valide, sans texte supplémentaire."),
+    "de": ("Antworten Sie IMMER auf Deutsch. "
+           "Antworten Sie NUR mit gültigem JSON, ohne zusätzlichen Text."),
+}
 
-def generate_course_structure(shortname, fullname, prompt, llm_url, model_id, api_key=""):
-    print("  → Generating course structure (5 modules)…")
+
+def _sys(language: str) -> str:
+    suffix = _LANG_SUFFIX.get(language,
+        f"Always respond in this language code: {language}. Respond ONLY with valid JSON, no additional text.")
+    return f"You are an expert in theological curriculum design. {suffix}"
+
+
+def generate_course_structure(shortname, fullname, prompt, llm_url, model_id, api_key="",
+                               num_modules=5, language="es"):
+    print(f"  → Generating course structure ({num_modules} modules)…")
     messages = [
-        {"role": "system", "content": SYS_SPANISH_JSON},
+        {"role": "system", "content": _sys(language)},
         {"role": "user", "content": f"""
-Diseña la estructura de un curso universitario teológico.
+Design the structure of a university-level theological course.
 
-Código: {shortname}
-Nombre: {fullname}
-Descripción: {prompt}
+Code: {shortname}
+Name: {fullname}
+Description: {prompt}
 
-Devuelve EXACTAMENTE este JSON (sin texto extra):
+Return EXACTLY this JSON (no extra text):
 {{
-  "course_summary": "Párrafo descriptivo del curso (150-200 palabras)",
+  "course_summary": "Descriptive paragraph of the course (150-200 words)",
   "modules": [
     {{
       "number": 1,
-      "title": "Módulo 1: [título]",
-      "objective": "Objetivo del módulo en una oración",
-      "key_topics": ["tema 1", "tema 2", "tema 3", "tema 4"]
+      "title": "Module 1: [title]",
+      "objective": "Module objective in one sentence",
+      "key_topics": ["topic 1", "topic 2", "topic 3", "topic 4"]
     }}
   ]
 }}
 
-Incluye exactamente 5 módulos.
+Include exactly {num_modules} modules.
 """},
     ]
-    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=2000, api_key=api_key)
+    max_tok = min(500 + num_modules * 300, 4000)
+    raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=max_tok, api_key=api_key)
     data = extract_json(raw)
-    assert len(data["modules"]) == 5, "Expected 5 modules"
+    if len(data["modules"]) != num_modules:
+        data["modules"] = data["modules"][:num_modules]
     return data
 
 
 def generate_module_content(mod_num, mod_title, objective, key_topics,
                              course_fullname, professor, llm_url, model_id,
-                             extra_instructions="", custom_prompt="", api_key=""):
+                             extra_instructions="", custom_prompt="", api_key="", language="es"):
     print(f"  → Module {mod_num}: {mod_title[:55]}…")
     if custom_prompt.strip():
         user_content = custom_prompt
@@ -564,20 +586,20 @@ Devuelve EXACTAMENTE este JSON:
 
 Incluye exactamente 10 términos en glossary y entre 5 y 7 secciones."""
     messages = [
-        {"role": "system", "content": SYS_SPANISH_JSON},
+        {"role": "system", "content": _sys(language)},
         {"role": "user", "content": user_content},
     ]
     raw = call_llm(messages, llm_url, model_id, temperature=0.7, max_tokens=6000, api_key=api_key)
     return extract_json(raw)
 
 
-def generate_syllabus(course_fullname, shortname, professor, modules, llm_url, model_id, api_key=""):
+def generate_syllabus(course_fullname, shortname, professor, modules, llm_url, model_id, api_key="", language="es"):
     print("  → Generating PRONTUARIO (syllabus)…")
     module_lines = "\n".join(
         f"- {m['title']}: {m['objective']}" for m in modules
     )
     messages = [
-        {"role": "system", "content": SYS_SPANISH_JSON},
+        {"role": "system", "content": _sys(language)},
         {"role": "user", "content": f"""
 Genera el prontuario académico completo para este curso.
 
@@ -601,7 +623,7 @@ Devuelve EXACTAMENTE este JSON:
     return extract_json(raw)
 
 
-def generate_quiz_questions(course_fullname, modules, num_questions, llm_url, model_id, api_key=""):
+def generate_quiz_questions(course_fullname, modules, num_questions, llm_url, model_id, api_key="", language="es"):
     print(f"  → Generating {num_questions} quiz questions…")
     module_summary = "\n".join(
         f"Módulo {m['number']}: {m['title']} — Temas: {', '.join(m.get('key_topics', []))}"
@@ -613,7 +635,7 @@ def generate_quiz_questions(course_fullname, modules, num_questions, llm_url, mo
         count = min(batch_size, num_questions - start)
         print(f"    → Questions {start+1}–{start+count}…")
         messages = [
-            {"role": "system", "content": SYS_SPANISH_JSON},
+            {"role": "system", "content": _sys(language)},
             {"role": "user", "content": f"""
 Crea {count} preguntas de selección múltiple para el examen final del curso "{course_fullname}".
 
@@ -645,7 +667,7 @@ Devuelve un JSON array de {count} objetos:
 
 
 def generate_homework_prompts(course_fullname, modules, homework_spec,
-                              llm_url, model_id, api_key=""):
+                              llm_url, model_id, api_key="", language="es"):
     """Generate homework descriptions for specified weeks.
 
     homework_spec: dict {module_num (1-based int): 'assign'|'forum'}
@@ -665,7 +687,7 @@ def generate_homework_prompts(course_fullname, modules, homework_spec,
                    else "foro de discusión adicional"
 
         messages = [
-            {"role": "system", "content": SYS_SPANISH_JSON},
+            {"role": "system", "content": _sys(language)},
             {"role": "user", "content": f"""
 Crea una {hw_label} para el Módulo {mod_num} del curso "{course_fullname}".
 
@@ -775,7 +797,8 @@ def build_mbz(config, content):
 
     # ── ID constants ───────────────────────────────────────────────────────────
     SEC_GENERAL  = 1
-    SEC_MODS     = [2, 3, 4, 5, 6]
+    n_mods       = len(modules)
+    SEC_MODS     = list(range(2, n_mods + 2))
 
     MOD_ATTEND   = 101
     MOD_FEEDBACK = 102
@@ -786,8 +809,8 @@ def build_mbz(config, content):
     MOD_QUIZ     = 107
     MOD_QBANK    = 108
 
-    # Per-module: page 109,111,113,115,117  forum 110,112,114,116,118
-    MOD_PAIRS = [{'page': 109 + i*2, 'forum': 110 + i*2} for i in range(5)]
+    # Per-module page/forum pairs. For N modules: pages 109,111,...; forums 110,112,...
+    MOD_PAIRS = [{'page': 109 + i*2, 'forum': 110 + i*2} for i in range(n_mods)]
 
     # Homework activities: IDs 119+ assigned to modules that have homework
     # homework_spec: {1: 'assign', 3: 'forum', ...}  (1-based module number)
@@ -795,7 +818,7 @@ def build_mbz(config, content):
     homework_prompts = content.get('homework_prompts', {})
     # Map module number → homework module ID (119, 120, …)
     hw_mids = {}
-    hw_counter = 119
+    hw_counter = 109 + 2 * n_mods
     for mod_num in sorted(homework_spec):
         hw_mids[mod_num] = hw_counter
         hw_counter += 1
@@ -938,7 +961,7 @@ def build_mbz(config, content):
         </section>''')
 
         all_act_dirs = [f'{t}_{m}' for m, t, _ in sec0_acts]
-        for i in range(5):
+        for i in range(n_mods):
             all_act_dirs += [f'page_{MOD_PAIRS[i]["page"]}',
                              f'forum_{MOD_PAIRS[i]["forum"]}']
         for mod_num, hw_mid in sorted(hw_mids.items()):
