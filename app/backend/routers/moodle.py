@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..database import get_settings, get_version, upsert_course, save_version
+from ..database import get_settings, get_version, upsert_course, save_version, save_deploy, list_deploys
 
 router = APIRouter(prefix="/moodle", tags=["moodle"])
 
@@ -463,6 +463,105 @@ def get_course_grades(course_id: int):
     return {"columns": columns, "rows": rows}
 
 
+# ── Student analytics ────────────────────────────────────────────────────────
+
+@router.get("/courses/{course_id}/analytics")
+def get_course_analytics(course_id: int):
+    """Enrollment stats, grade distribution, and per-quiz performance."""
+    import time as _time
+
+    result: dict = {}
+
+    # 1 ── Enrollment
+    try:
+        enrolled = _moodle_call("core_enrol_get_enrolled_users", {"courseid": course_id})
+        if not isinstance(enrolled, list):
+            enrolled = []
+        cutoff = int(_time.time()) - 30 * 86400
+        result["enrollment"] = {
+            "total":          len(enrolled),
+            "active_30d":     sum(1 for u in enrolled if (u.get("lastaccess") or 0) > cutoff),
+            "never_accessed": sum(1 for u in enrolled if not (u.get("lastaccess") or 0)),
+            "suspended":      sum(1 for u in enrolled if u.get("suspended")),
+        }
+    except Exception as e:
+        result["enrollment_error"] = str(e)
+        result["enrollment"] = {"total": 0, "active_30d": 0, "never_accessed": 0, "suspended": 0}
+
+    # 2 ── Grade distribution from course total
+    try:
+        data = _moodle_call("gradereport_user_get_grade_items",
+                            {"courseid": course_id, "userid": 0})
+        user_grades = data.get("usergrades", []) if isinstance(data, dict) else []
+
+        totals = []
+        for ug in user_grades:
+            for gi in ug.get("gradeitems", []):
+                if gi.get("itemtype") == "course":
+                    raw  = gi.get("graderaw")
+                    maxg = float(gi.get("grademax") or 100) or 100.0
+                    if raw is not None:
+                        totals.append(float(raw) / maxg * 100)
+                    break
+
+        dist = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
+        for pct in totals:
+            if pct >= 90:   dist["A"] += 1
+            elif pct >= 80: dist["B"] += 1
+            elif pct >= 70: dist["C"] += 1
+            elif pct >= 60: dist["D"] += 1
+            else:           dist["F"] += 1
+
+        avg       = sum(totals) / len(totals) if totals else None
+        pass_rate = sum(1 for p in totals if p >= 60) / len(totals) * 100 if totals else None
+        result.update({
+            "grade_distribution": dist,
+            "avg_grade":    round(avg, 1)       if avg       is not None else None,
+            "pass_rate":    round(pass_rate, 1) if pass_rate is not None else None,
+            "student_count": len(totals),
+        })
+    except Exception as e:
+        result["grades_error"] = str(e)
+        result.setdefault("grade_distribution", {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0})
+        result.setdefault("avg_grade", None)
+        result.setdefault("pass_rate", None)
+        result.setdefault("student_count", 0)
+
+    # 3 ── Quiz performance
+    try:
+        quiz_resp = _moodle_call("mod_quiz_get_quizzes_by_courses",
+                                 {"courseids[0]": course_id})
+        quizzes_raw = quiz_resp.get("quizzes", []) if isinstance(quiz_resp, dict) else []
+
+        quizzes = []
+        for q in quizzes_raw:
+            qid  = q.get("id")
+            maxg = float(q.get("grade") or 100) or 100.0
+            try:
+                att_resp = _moodle_call("mod_quiz_get_user_attempts",
+                                        {"quizid": qid, "userid": 0, "status": "finished"})
+                attempts = att_resp.get("attempts", []) if isinstance(att_resp, dict) else []
+                grades   = [float(a["sumgrades"]) / maxg * 100
+                            for a in attempts if a.get("sumgrades") is not None]
+                quizzes.append({
+                    "id":            qid,
+                    "name":          q.get("name", ""),
+                    "attempt_count": len(attempts),
+                    "avg_grade":  round(sum(grades) / len(grades), 1)                  if grades else None,
+                    "pass_rate":  round(sum(1 for g in grades if g >= 60) / len(grades) * 100, 1) if grades else None,
+                })
+            except Exception:
+                quizzes.append({"id": qid, "name": q.get("name", ""),
+                                "attempt_count": 0, "avg_grade": None, "pass_rate": None})
+
+        result["quizzes"] = quizzes
+    except Exception as e:
+        result["quizzes_error"] = str(e)
+        result.setdefault("quizzes", [])
+
+    return result
+
+
 # ── Categories list ───────────────────────────────────────────────────────────
 
 @router.get("/categories")
@@ -554,14 +653,70 @@ def deploy_to_moodle(body: DeployIn):
         })
         pushed += 1
 
+    # 5 ── Seed forum discussions with each module's forum question
+    forums_seeded = 0
+    try:
+        # Re-fetch contents now that sections are populated; Moodle may have
+        # auto-created a News forum in section 0 — we want section N forums.
+        fresh_sections = _moodle_call("core_course_get_contents", {"courseid": moodle_id})
+        # Build map: section_number → list of forum module IDs
+        sec_forum_map: dict[int, list[int]] = {}
+        for sec in fresh_sections:
+            sec_num = sec.get("section", -1)
+            forum_ids = [
+                m["id"] for m in sec.get("modules", [])
+                if m.get("modname") == "forum"
+            ]
+            if forum_ids:
+                sec_forum_map[sec_num] = forum_ids
+
+        for mod in modules:
+            num       = mod["number"]
+            mc        = next((m for m in mcs if m.get("module_num") == num), {})
+            forum_q   = (mc.get("forum_question") or mc.get("discussion_question") or "").strip()
+            forum_ids = sec_forum_map.get(num, [])
+            if not forum_q or not forum_ids:
+                continue
+            _moodle_call("mod_forum_add_discussion", {
+                "forumid":       forum_ids[0],
+                "subject":       mod["title"],
+                "message":       forum_q,
+                "messageformat": 1,
+            })
+            forums_seeded += 1
+    except Exception:
+        pass  # forum seeding is best-effort; don't fail the whole deploy
+
+    course_url = f"{moodle_url}/course/view.php?id={moodle_id}"
+
+    # 6 ── Persist deploy record
+    try:
+        save_deploy(
+            version_id=body.version_id,
+            shortname=body.shortname,
+            moodle_course_id=moodle_id,
+            moodle_url=course_url,
+            sections_pushed=pushed,
+            forums_seeded=forums_seeded,
+        )
+    except Exception:
+        pass
+
     return {
         "moodle_course_id": moodle_id,
-        "url":              f"{moodle_url}/course/view.php?id={moodle_id}",
+        "url":              course_url,
         "sections_pushed":  pushed,
+        "forums_seeded":    forums_seeded,
     }
 
 
 # ── Capabilities summary (what each modtype supports via API) ─────────────────
+
+@router.get("/deploys")
+def get_deploys(version_id: int):
+    """Return deploy history for a specific course version."""
+    return list_deploys(version_id)
+
 
 @router.get("/capabilities")
 def get_capabilities():

@@ -180,6 +180,96 @@ export interface CourseReviewResult {
   error?:      string   // set by frontend when request fails
 }
 
+export interface QuizQuestion {
+  question:      string
+  options:       string[]
+  correct_index: number
+  explanation?:  string
+}
+
+export interface PersistedReview extends CourseReviewResult {
+  id:          number
+  version_id:  number | null
+  agent_id:    string
+  agent_label: string
+  agent_color: string
+  run_at:      string
+}
+
+export interface MoodleDeploy {
+  id: number
+  version_id: number
+  shortname: string
+  moodle_course_id: number
+  moodle_url: string
+  sections_pushed: number
+  forums_seeded: number
+  deployed_at: string
+}
+
+export interface BibleRef {
+  ref_text: string
+  book_canonical: string
+  chapter: number
+  verse: number
+  source_field: string
+  context: string
+  status: 'valid' | 'unknown_book' | 'chapter_out_of_range' | 'verse_likely_ok'
+}
+
+export interface CourseAnalytics {
+  enrollment: {
+    total: number
+    active_30d: number
+    never_accessed: number
+    suspended: number
+  }
+  grade_distribution: { A: number; B: number; C: number; D: number; F: number }
+  avg_grade: number | null
+  pass_rate: number | null
+  student_count: number
+  quizzes: Array<{
+    id: number
+    name: string
+    attempt_count: number
+    avg_grade: number | null
+    pass_rate: number | null
+  }>
+  enrollment_error?: string
+  grades_error?: string
+  quizzes_error?: string
+}
+
+export interface CurriculumEntry {
+  shortname: string
+  fullname: string
+  category: string
+  instance: string
+  module_count: number
+  domains: Record<string, number>
+}
+
+export interface CurriculumMap {
+  courses: CurriculumEntry[]
+  domains: string[]
+}
+
+export interface ReviewSchedule {
+  id: number
+  shortname: string
+  version_id: number | null
+  agent_id: string
+  agent_label: string
+  agent_color: string
+  agent_context: string
+  model_id: string
+  frequency: string
+  next_run_at: string
+  last_run_at: string | null
+  enabled: number
+  created_at: string
+}
+
 export interface EvaluationCache {
   results:      LlmModel[]
   evaluated_at: string | null
@@ -253,12 +343,44 @@ export const api = {
                      post<{ deleted: string[]; not_found: string[] }>('/courses/bulk-delete', { shortnames }),
     stats:         (instance: string)    =>
                      get<InstanceStats>(`/courses/stats?instance=${encodeURIComponent(instance)}`),
-    review: (sn: string, body: { agent_context: string; model_id: string }) =>
+    review: (sn: string, body: { agent_context: string; model_id: string; version_id?: number; agent_id?: string; agent_label?: string; agent_color?: string }) =>
               post<CourseReviewResult>(`/courses/${encodeURIComponent(sn)}/review`, body),
     applyReview: (sn: string, body: { reviews: CourseReviewResult[]; model_id: string }) =>
               post<CourseVersion>(`/courses/${encodeURIComponent(sn)}/regenerate-from-review`, body),
     finalizeReview: (sn: string, vid: number, body: { reviews: CourseReviewResult[]; model_id: string }) =>
               post<CourseVersion>(`/courses/${encodeURIComponent(sn)}/versions/${vid}/finalize-review`, body),
+    patchField: (sn: string, vid: number, body: { module_num?: number; field: string; value: string }) =>
+              req<{ ok: boolean }>('PATCH', `/courses/${encodeURIComponent(sn)}/versions/${vid}/field`, body),
+    saveQuiz:   (sn: string, vid: number, questions: QuizQuestion[]) =>
+              put<{ ok: boolean; count: number }>(`/courses/${encodeURIComponent(sn)}/versions/${vid}/quiz`, { questions }),
+    exportHtmlUrl: (sn: string, vid: number) =>
+              `${BASE}/courses/${encodeURIComponent(sn)}/versions/${vid}/export-html`,
+    listReviews: (sn: string, version_id?: number) =>
+              get<PersistedReview[]>(`/courses/${encodeURIComponent(sn)}/reviews${version_id != null ? `?version_id=${version_id}` : ''}`),
+    deleteReview: (sn: string, rid: number) =>
+              del<{ deleted: number }>(`/courses/${encodeURIComponent(sn)}/reviews/${rid}`),
+    bibleRefs:  (sn: string, vid: number) =>
+              get<BibleRef[]>(`/courses/${encodeURIComponent(sn)}/versions/${vid}/bible-refs`),
+  },
+
+  // ── Curriculum mapper ────────────────────────────────────────────────────
+  curriculum: () => get<CurriculumMap>('/courses/curriculum'),
+
+  // ── Review schedules ─────────────────────────────────────────────────────
+  schedules: {
+    list:       ()                 => get<ReviewSchedule[]>('/courses/schedules'),
+    create:     (body: {
+                  shortname: string; version_id?: number; agent_id: string;
+                  agent_label: string; agent_color: string; agent_context: string;
+                  model_id: string; frequency: string
+                })                 => post<ReviewSchedule>('/courses/schedules', body),
+    delete:     (id: number)       => del<{ deleted: number }>(`/courses/schedules/${id}`),
+    runOverdue: ()                 => post<{ triggered: number; errors: string[] }>('/courses/schedules/run-overdue', {}),
+  },
+
+  // ── Reviews ───────────────────────────────────────────────────────────────
+  reviews: {
+    recent: (limit = 100) => get<PersistedReview[]>(`/courses/reviews/recent?limit=${limit}`),
   },
 
   // ── LLM ───────────────────────────────────────────────────────────────────
@@ -283,8 +405,10 @@ export const api = {
     addDiscussion: (body: unknown) => post('/moodle/forum/discussion', body),
     grades:        (id: number)    => get<GradeReport>(`/moodle/courses/${id}/grades`),
     capabilities:  ()              => get<{ modname: string; can_push: boolean; note: string }[]>('/moodle/capabilities'),
+    deploys:       (version_id: number) => get<MoodleDeploy[]>(`/moodle/deploys?version_id=${version_id}`),
+    analytics:     (id: number) => get<CourseAnalytics>(`/moodle/courses/${id}/analytics`),
     deploy:        (body: { version_id: number; shortname: string; fullname: string; category_id: number; start_date?: string; end_date?: string }) =>
-                     post<{ moodle_course_id: number; url: string; sections_pushed: number }>('/moodle/deploy', body),
+                     post<{ moodle_course_id: number; url: string; sections_pushed: number; forums_seeded: number }>('/moodle/deploy', body),
     importCourse:  (id: number, body: {
       shortname: string; fullname: string;
       start_date?: string; end_date?: string;

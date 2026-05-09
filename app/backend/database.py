@@ -65,23 +65,92 @@ def init_db():
             built_at   TEXT NOT NULL DEFAULT (datetime('now')),
             filename   TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS reviews (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            shortname     TEXT    NOT NULL,
+            version_id    INTEGER,
+            version_num   INTEGER,
+            agent_id      TEXT    NOT NULL DEFAULT '',
+            agent_label   TEXT    NOT NULL DEFAULT '',
+            agent_color   TEXT    NOT NULL DEFAULT 'gray',
+            overall       TEXT,
+            score         INTEGER,
+            summary       TEXT,
+            sections_json TEXT    NOT NULL DEFAULT '[]',
+            error         TEXT,
+            run_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS moodle_deploys (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            version_id       INTEGER NOT NULL,
+            shortname        TEXT    NOT NULL,
+            moodle_course_id INTEGER NOT NULL,
+            moodle_url       TEXT    NOT NULL DEFAULT '',
+            sections_pushed  INTEGER NOT NULL DEFAULT 0,
+            forums_seeded    INTEGER NOT NULL DEFAULT 0,
+            deployed_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS review_schedules (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            shortname     TEXT    NOT NULL,
+            version_id    INTEGER,
+            agent_id      TEXT    NOT NULL DEFAULT '',
+            agent_label   TEXT    NOT NULL DEFAULT 'Reviewer',
+            agent_color   TEXT    NOT NULL DEFAULT 'gray',
+            agent_context TEXT    NOT NULL DEFAULT '',
+            model_id      TEXT    NOT NULL DEFAULT '',
+            frequency     TEXT    NOT NULL DEFAULT 'weekly',
+            next_run_at   TEXT    NOT NULL,
+            last_run_at   TEXT,
+            enabled       INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
         """)
 
-    # Migration: add instance column to existing databases
+    # Migrations for existing databases
     with db() as conn:
-        try:
-            conn.execute(
-                "ALTER TABLE courses ADD COLUMN instance TEXT NOT NULL DEFAULT 'Local'"
-            )
-        except Exception:
-            pass  # column already exists
+        for stmt in [
+            "ALTER TABLE courses ADD COLUMN instance TEXT NOT NULL DEFAULT 'Local'",
+            ("CREATE TABLE IF NOT EXISTS moodle_deploys ("
+             "id INTEGER PRIMARY KEY AUTOINCREMENT, version_id INTEGER NOT NULL, "
+             "shortname TEXT NOT NULL, moodle_course_id INTEGER NOT NULL, "
+             "moodle_url TEXT NOT NULL DEFAULT '', "
+             "sections_pushed INTEGER NOT NULL DEFAULT 0, "
+             "forums_seeded INTEGER NOT NULL DEFAULT 0, "
+             "deployed_at TEXT NOT NULL DEFAULT (datetime('now')))"),
+            ("CREATE TABLE IF NOT EXISTS reviews ("
+             "id INTEGER PRIMARY KEY AUTOINCREMENT, shortname TEXT NOT NULL, "
+             "version_id INTEGER, version_num INTEGER, "
+             "agent_id TEXT NOT NULL DEFAULT '', agent_label TEXT NOT NULL DEFAULT '', "
+             "agent_color TEXT NOT NULL DEFAULT 'gray', "
+             "overall TEXT, score INTEGER, summary TEXT, "
+             "sections_json TEXT NOT NULL DEFAULT '[]', error TEXT, "
+             "run_at TEXT NOT NULL DEFAULT (datetime('now')))"),
+            ("CREATE TABLE IF NOT EXISTS review_schedules ("
+             "id INTEGER PRIMARY KEY AUTOINCREMENT, shortname TEXT NOT NULL, "
+             "version_id INTEGER, agent_id TEXT NOT NULL DEFAULT '', "
+             "agent_label TEXT NOT NULL DEFAULT 'Reviewer', "
+             "agent_color TEXT NOT NULL DEFAULT 'gray', "
+             "agent_context TEXT NOT NULL DEFAULT '', "
+             "model_id TEXT NOT NULL DEFAULT '', frequency TEXT NOT NULL DEFAULT 'weekly', "
+             "next_run_at TEXT NOT NULL DEFAULT (datetime('now')), last_run_at TEXT, "
+             "enabled INTEGER NOT NULL DEFAULT 1, "
+             "created_at TEXT NOT NULL DEFAULT (datetime('now')))"),
+        ]:
+            try:
+                conn.execute(stmt)
+            except Exception:
+                pass
 
     _seed_settings()
 
 
 def _seed_settings():
     defaults = {
-        "moodle_url":   "https://biblos.moodlecloud.com",
+        "moodle_url":   "",
         "moodle_token": "",
         "llm_url":      "http://192.168.86.41:1234/v1",
         "llm_api_key":  "",
@@ -231,3 +300,144 @@ def delete_course(shortname: str) -> bool:
             "DELETE FROM courses WHERE shortname=?", (shortname,)
         )
     return cur.rowcount > 0
+
+
+# ── Review helpers ────────────────────────────────────────────────────────────
+
+def _review_row(row) -> dict:
+    d = dict(row)
+    d["sections"] = json.loads(d.pop("sections_json", "[]"))
+    return d
+
+
+def save_review(shortname: str, version_id: int | None, version_num: int | None,
+                agent_id: str, agent_label: str, agent_color: str,
+                result: dict) -> dict:
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO reviews
+               (shortname, version_id, version_num, agent_id, agent_label, agent_color,
+                overall, score, summary, sections_json, error)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                shortname, version_id, version_num,
+                agent_id, agent_label, agent_color,
+                result.get("overall"), result.get("score"),
+                result.get("summary"),
+                json.dumps(result.get("sections", []), ensure_ascii=False),
+                result.get("error"),
+            ),
+        )
+        return _review_row(conn.execute(
+            "SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)
+        ).fetchone())
+
+
+def list_reviews(shortname: str, version_id: int | None = None, limit: int = 50) -> list[dict]:
+    with db() as conn:
+        if version_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM reviews WHERE shortname=? AND version_id=? "
+                "ORDER BY run_at DESC LIMIT ?",
+                (shortname, version_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM reviews WHERE shortname=? ORDER BY run_at DESC LIMIT ?",
+                (shortname, limit),
+            ).fetchall()
+    return [_review_row(r) for r in rows]
+
+
+def list_recent_reviews(limit: int = 100) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM reviews ORDER BY run_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [_review_row(r) for r in rows]
+
+
+def delete_review(review_id: int) -> bool:
+    with db() as conn:
+        cur = conn.execute("DELETE FROM reviews WHERE id=?", (review_id,))
+    return cur.rowcount > 0
+
+
+# ── Deploy helpers ────────────────────────────────────────────────────────────
+
+def save_deploy(version_id: int, shortname: str, moodle_course_id: int,
+                moodle_url: str, sections_pushed: int, forums_seeded: int) -> dict:
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO moodle_deploys
+               (version_id, shortname, moodle_course_id, moodle_url,
+                sections_pushed, forums_seeded)
+               VALUES (?,?,?,?,?,?)""",
+            (version_id, shortname, moodle_course_id, moodle_url,
+             sections_pushed, forums_seeded),
+        )
+        row = conn.execute(
+            "SELECT * FROM moodle_deploys WHERE id=?", (cur.lastrowid,)
+        ).fetchone()
+    return dict(row)
+
+
+def list_deploys(version_id: int) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM moodle_deploys WHERE version_id=? ORDER BY deployed_at DESC",
+            (version_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Review schedule helpers ───────────────────────────────────────────────────
+
+def save_schedule(shortname: str, agent_id: str, agent_label: str, agent_color: str,
+                  agent_context: str, model_id: str, frequency: str, next_run_at: str,
+                  version_id: int | None = None) -> dict:
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO review_schedules
+               (shortname, version_id, agent_id, agent_label, agent_color,
+                agent_context, model_id, frequency, next_run_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (shortname, version_id, agent_id, agent_label, agent_color,
+             agent_context, model_id, frequency, next_run_at),
+        )
+        row = conn.execute(
+            "SELECT * FROM review_schedules WHERE id=?", (cur.lastrowid,)
+        ).fetchone()
+    return dict(row)
+
+
+def list_schedules() -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM review_schedules ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_schedule(schedule_id: int) -> bool:
+    with db() as conn:
+        cur = conn.execute("DELETE FROM review_schedules WHERE id=?", (schedule_id,))
+    return cur.rowcount > 0
+
+
+def get_overdue_schedules() -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM review_schedules "
+            "WHERE enabled=1 AND next_run_at <= datetime('now') "
+            "ORDER BY next_run_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_schedule_run(schedule_id: int, last_run_at: str, next_run_at: str):
+    with db() as conn:
+        conn.execute(
+            "UPDATE review_schedules SET last_run_at=?, next_run_at=? WHERE id=?",
+            (last_run_at, next_run_at, schedule_id),
+        )

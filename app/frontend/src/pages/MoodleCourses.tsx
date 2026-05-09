@@ -15,11 +15,13 @@ import {
   IconReportAnalytics,
   IconBook2, IconCategory, IconClock, IconUsers,
   IconFileCheck, IconFileX, IconMagnet,
+  IconChartBar, IconAlertTriangle, IconUserCheck, IconUserOff,
 } from '@tabler/icons-react'
 import {
   api, type MoodleCourse, type MoodleSection,
   type MoodleActivity, type CourseVersion, type MoodleBackupFile,
   type GradeReport, type GradeColumn, type GradeCell,
+  type CourseAnalytics,
 } from '../api/client'
 
 const ts2date = (ts: number) => ts ? new Date(ts * 1000).toISOString().slice(0, 10) : ''
@@ -415,6 +417,157 @@ function GradesPanel({ courseId }: { courseId: number }) {
   )
 }
 
+// ── Analytics panel ───────────────────────────────────────────────────────────
+
+function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: string }) {
+  const [data,    setData]    = useState<CourseAnalytics | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    api.moodle.analytics(courseId)
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [courseId])
+
+  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">Loading analytics…</Text></Stack>
+  if (error)   return <Alert color="red" title="Could not load analytics" icon={<IconAlertTriangle size={14} />}>{error}</Alert>
+  if (!data)   return null
+
+  const enr = data.enrollment
+  const dist = data.grade_distribution
+  const total = Object.values(dist).reduce((a, b) => a + b, 0)
+
+  const GRADE_COLORS: Record<string, string> = {
+    A: 'green', B: 'teal', C: 'blue', D: 'yellow', F: 'red',
+  }
+
+  const weakQuizzes = (data.quizzes || []).filter(q => q.pass_rate !== null && q.pass_rate < 70)
+
+  return (
+    <Stack gap="md">
+      {/* Enrollment stats */}
+      <SimpleGrid cols={4} spacing="sm">
+        <StatCard
+          icon={<IconUsers size={16} />}
+          label="Enrolled"
+          value={enr.total}
+          color="blue"
+        />
+        <StatCard
+          icon={<IconUserCheck size={16} />}
+          label="Active (30d)"
+          value={enr.active_30d}
+          color="green"
+          sub={enr.total > 0 ? `${Math.round(enr.active_30d / enr.total * 100)}%` : undefined}
+        />
+        <StatCard
+          icon={<IconChartBar size={16} />}
+          label="Pass Rate"
+          value={data.pass_rate !== null ? `${data.pass_rate}%` : '—'}
+          color={data.pass_rate !== null && data.pass_rate >= 70 ? 'green' : 'red'}
+          sub={data.avg_grade !== null ? `avg ${data.avg_grade}%` : undefined}
+        />
+        <StatCard
+          icon={<IconUserOff size={16} />}
+          label="Never Accessed"
+          value={enr.never_accessed}
+          color={enr.never_accessed > 0 ? 'orange' : 'gray'}
+        />
+      </SimpleGrid>
+
+      {/* Grade distribution */}
+      {total > 0 && (
+        <Paper withBorder p="md" radius="md">
+          <Text size="sm" fw={600} mb="sm">Grade Distribution ({data.student_count} students)</Text>
+          <Stack gap={6}>
+            {(['A','B','C','D','F'] as const).map(letter => {
+              const count = dist[letter]
+              const pct   = total > 0 ? Math.round(count / total * 100) : 0
+              return (
+                <Group key={letter} gap="sm" wrap="nowrap">
+                  <Badge size="sm" color={GRADE_COLORS[letter]} w={28} ta="center">{letter}</Badge>
+                  <Box style={{ flex: 1 }}>
+                    <Progress value={pct} color={GRADE_COLORS[letter]} size="md" />
+                  </Box>
+                  <Text size="xs" w={60} ta="right">{count} ({pct}%)</Text>
+                </Group>
+              )
+            })}
+          </Stack>
+        </Paper>
+      )}
+
+      {data.grades_error && (
+        <Alert color="orange" title="Grade data unavailable" py="xs">{data.grades_error}</Alert>
+      )}
+
+      {/* Quiz performance */}
+      {(data.quizzes || []).length > 0 && (
+        <Paper withBorder p="md" radius="md">
+          <Text size="sm" fw={600} mb="sm">Quiz Performance</Text>
+          <Table withTableBorder highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Quiz</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>Attempts</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>Avg Grade</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>Pass Rate</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {(data.quizzes || []).map(q => (
+                <Table.Tr key={q.id}>
+                  <Table.Td><Text size="xs">{q.name}</Text></Table.Td>
+                  <Table.Td style={{ textAlign: 'center' }}>
+                    <Text size="xs">{q.attempt_count}</Text>
+                  </Table.Td>
+                  <Table.Td style={{ textAlign: 'center' }}>
+                    <Badge size="sm" color={q.avg_grade !== null && q.avg_grade >= 70 ? 'green' : 'red'} variant="light">
+                      {q.avg_grade !== null ? `${q.avg_grade}%` : '—'}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td style={{ textAlign: 'center' }}>
+                    <Badge size="sm" color={q.pass_rate !== null && q.pass_rate >= 70 ? 'green' : 'orange'} variant="light">
+                      {q.pass_rate !== null ? `${q.pass_rate}%` : '—'}
+                    </Badge>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Paper>
+      )}
+
+      {/* Weak areas */}
+      {weakQuizzes.length > 0 && (
+        <Alert color="orange" title={`${weakQuizzes.length} weak area${weakQuizzes.length > 1 ? 's' : ''} detected`}
+               icon={<IconAlertTriangle size={14} />}>
+          <Text size="xs">
+            Quizzes with pass rate below 70%:{' '}
+            {weakQuizzes.map(q => q.name).join(', ')}
+          </Text>
+          {shortname && (
+            <Text size="xs" mt={4} c="dimmed">
+              Open this course in the Library → Autonomous Review to regenerate weak modules.
+            </Text>
+          )}
+        </Alert>
+      )}
+
+      {data.enrollment_error && (
+        <Alert color="orange" title="Enrollment data unavailable" py="xs">{data.enrollment_error}</Alert>
+      )}
+      {data.quizzes_error && (
+        <Alert color="orange" title="Quiz data unavailable" py="xs">{data.quizzes_error}</Alert>
+      )}
+    </Stack>
+  )
+}
+
 // ── Category group in the left panel ─────────────────────────────────────────
 
 interface MoodleCategoryGroupProps {
@@ -525,7 +678,7 @@ export default function MoodleCoursesPage() {
   const [dashOpen, setDashOpen]         = useState(false)
 
   // Detail view mode
-  const [viewMode, setViewMode]         = useState<'structure' | 'grades'>('structure')
+  const [viewMode, setViewMode]         = useState<'structure' | 'grades' | 'analytics'>('structure')
 
   const loadCourses = () => {
     setLoading(true)
@@ -1057,10 +1210,11 @@ export default function MoodleCoursesPage() {
               <SegmentedControl
                 size="xs"
                 value={viewMode}
-                onChange={v => setViewMode(v as 'structure' | 'grades')}
+                onChange={v => setViewMode(v as 'structure' | 'grades' | 'analytics')}
                 data={[
                   { value: 'structure', label: 'Structure' },
                   { value: 'grades',    label: <Group gap={4}><IconReportAnalytics size={13} />Grades</Group> },
+                  { value: 'analytics', label: <Group gap={4}><IconChartBar size={13} />Analytics</Group> },
                 ]}
               />
 
@@ -1088,6 +1242,11 @@ export default function MoodleCoursesPage() {
               {/* Grades view */}
               {viewMode === 'grades' && (
                 <GradesPanel courseId={selected.id} />
+              )}
+
+              {/* Analytics view */}
+              {viewMode === 'analytics' && (
+                <AnalyticsPanel courseId={selected.id} shortname={selected.shortname} />
               )}
             </Stack>
           )}

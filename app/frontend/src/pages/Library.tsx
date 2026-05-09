@@ -4,7 +4,7 @@ import {
   Loader, Alert, ActionIcon, Tooltip, Paper,
   ThemeIcon, Divider, Box, Checkbox, Collapse,
   Progress, ScrollArea, Modal, Select, TextInput, Anchor,
-  SimpleGrid, RingProgress, Center,
+  SimpleGrid, RingProgress, Center, Accordion, Table,
 } from '@mantine/core'
 import {
   IconDownload, IconBuildingArch,
@@ -13,11 +13,13 @@ import {
   IconChevronDown, IconChevronRight, IconUpload,
   IconCloudUpload, IconExternalLink,
   IconBook2, IconCategory, IconClock, IconGitBranch,
-  IconStack, IconSearch,
+  IconStack, IconSearch, IconGitCompare, IconPrinter,
+  IconChartBar, IconArrowUp, IconArrowDown, IconMinus,
 } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
-import { api, type Course, type CourseVersion, type InstanceStats } from '../api/client'
+import { api, type Course, type CourseVersion, type InstanceStats, type PersistedReview, type MoodleDeploy } from '../api/client'
 import { CourseViewer } from '../components/CourseViewer'
+import { VersionDiff } from '../components/VersionDiff'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +51,261 @@ function DeleteConfirm({ onConfirm, onCancel, loading }: {
 
 // ── Course detail panel ───────────────────────────────────────────────────────
 
+// ── Course Progress Report ────────────────────────────────────────────────────
+
+type CheckStatus = 'Passed' | 'Needs Revision' | 'Missing'
+const STATUS_COLOR: Record<CheckStatus, string> = {
+  'Passed': 'green', 'Needs Revision': 'orange', 'Missing': 'red',
+}
+
+function flatChecks(r: PersistedReview): Map<string, CheckStatus> {
+  const map = new Map<string, CheckStatus>()
+  for (const sec of r.sections ?? [])
+    for (const item of sec.items ?? [])
+      map.set(item.label, item.status as CheckStatus)
+  return map
+}
+
+function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
+  const sorted = useMemo(() => [...reviews].sort((a, b) => a.run_at.localeCompare(b.run_at)), [reviews])
+
+  // Group chronologically by agent
+  const byAgent = useMemo(() => {
+    const map = new Map<string, PersistedReview[]>()
+    for (const r of sorted) {
+      const key = r.agent_id || r.agent_label
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(r)
+    }
+    return map
+  }, [sorted])
+
+  // Unique review timestamps (columns in timeline)
+  const allDates = useMemo(() => [...new Set(sorted.map(r => r.run_at))], [sorted])
+
+  if (reviews.length === 0) {
+    return (
+      <Stack align="center" py="xl" gap="xs">
+        <Text size="sm" c="dimmed">No reviews stored yet for this course.</Text>
+        <Text size="xs" c="dimmed">Run an Autonomous Review — every result is saved automatically.</Text>
+      </Stack>
+    )
+  }
+
+  return (
+    <Stack gap="xl">
+
+      {/* ── Score Timeline ── */}
+      <Box>
+        <Text fw={700} size="sm" mb="sm">Score Timeline</Text>
+        <ScrollArea>
+          <Table withTableBorder withColumnBorders fz="xs" style={{ minWidth: 420 }}>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th style={{ minWidth: 140 }}>Agent</Table.Th>
+                {allDates.map(d => (
+                  <Table.Th key={d} ta="center">
+                    <Text size="xs">{new Date(d + 'Z').toLocaleDateString()}</Text>
+                    <Text size="xs" c="dimmed">{new Date(d + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                  </Table.Th>
+                ))}
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {[...byAgent.entries()].map(([key, agentReviews]) => {
+                const dateMap = new Map(agentReviews.map(r => [r.run_at, r]))
+                return (
+                  <Table.Tr key={key}>
+                    <Table.Td>
+                      <Badge size="xs" color={agentReviews[0].agent_color || 'gray'} variant="light">
+                        {agentReviews[0].agent_label}
+                      </Badge>
+                    </Table.Td>
+                    {allDates.map(d => {
+                      const r = dateMap.get(d)
+                      if (!r) return <Table.Td key={d} ta="center"><Text size="xs" c="dimmed">—</Text></Table.Td>
+                      const idx    = agentReviews.indexOf(r)
+                      const prev   = idx > 0 ? agentReviews[idx - 1] : null
+                      const delta  = prev && r.score != null && prev.score != null ? r.score - prev.score : null
+                      const overall = r.overall ?? ''
+                      return (
+                        <Table.Td key={d} ta="center">
+                          <Group gap={4} justify="center" wrap="nowrap">
+                            <Badge size="xs"
+                              color={overall === 'Passed' ? 'green' : overall === 'Needs Revision' ? 'orange' : 'red'}
+                              variant="filled">
+                              {r.score}/100
+                            </Badge>
+                            {delta !== null && (
+                              delta > 0
+                                ? <IconArrowUp size={12} color="green" />
+                                : delta < 0
+                                  ? <IconArrowDown size={12} color="red" />
+                                  : <IconMinus size={12} color="gray" />
+                            )}
+                          </Group>
+                          <Text size="xs" c="dimmed">v{r.version_num}</Text>
+                        </Table.Td>
+                      )
+                    })}
+                  </Table.Tr>
+                )
+              })}
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
+      </Box>
+
+      {/* ── Check-level diff (agents with 2+ reviews) ── */}
+      {[...byAgent.entries()].filter(([, arr]) => arr.length >= 2).map(([key, agentReviews]) => {
+        const first    = agentReviews[0]
+        const last     = agentReviews[agentReviews.length - 1]
+        const firstMap = flatChecks(first)
+        const lastMap  = flatChecks(last)
+
+        const improved:  { label: string; from: CheckStatus; to: CheckStatus }[] = []
+        const regressed: { label: string; from: CheckStatus; to: CheckStatus }[] = []
+        const unchanged: { label: string; status: CheckStatus }[] = []
+
+        for (const [label, toStatus] of lastMap.entries()) {
+          const fromStatus = firstMap.get(label)
+          if (!fromStatus || fromStatus === toStatus) {
+            unchanged.push({ label, status: toStatus })
+          } else if (toStatus === 'Passed') {
+            improved.push({ label, from: fromStatus, to: toStatus })
+          } else {
+            regressed.push({ label, from: fromStatus, to: toStatus })
+          }
+        }
+
+        return (
+          <Box key={key}>
+            <Text fw={700} size="sm" mb="sm">
+              {agentReviews[0].agent_label} — Progress: v{first.version_num} → v{last.version_num}
+              {' '}
+              {first.score != null && last.score != null && (
+                <Text span size="sm" c={last.score >= first.score ? 'green' : 'red'}>
+                  ({first.score} → {last.score})
+                </Text>
+              )}
+            </Text>
+            <Stack gap="xs">
+              {improved.length > 0 && (
+                <Box>
+                  <Text size="xs" fw={600} c="green" mb={4}>Improved ({improved.length})</Text>
+                  <Stack gap={3}>
+                    {improved.map(({ label, from, to }) => (
+                      <Group key={label} gap="xs" wrap="nowrap">
+                        <IconArrowUp size={13} color="green" style={{ flexShrink: 0 }} />
+                        <Text size="xs" style={{ flex: 1 }}>{label}</Text>
+                        <Badge size="xs" color={STATUS_COLOR[from]} variant="light">{from}</Badge>
+                        <Text size="xs" c="dimmed">→</Text>
+                        <Badge size="xs" color={STATUS_COLOR[to]} variant="light">{to}</Badge>
+                      </Group>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+              {regressed.length > 0 && (
+                <Box>
+                  <Text size="xs" fw={600} c="red" mb={4}>Regressed ({regressed.length})</Text>
+                  <Stack gap={3}>
+                    {regressed.map(({ label, from, to }) => (
+                      <Group key={label} gap="xs" wrap="nowrap">
+                        <IconArrowDown size={13} color="red" style={{ flexShrink: 0 }} />
+                        <Text size="xs" style={{ flex: 1 }}>{label}</Text>
+                        <Badge size="xs" color={STATUS_COLOR[from]} variant="light">{from}</Badge>
+                        <Text size="xs" c="dimmed">→</Text>
+                        <Badge size="xs" color={STATUS_COLOR[to]} variant="light">{to}</Badge>
+                      </Group>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+              {improved.length === 0 && regressed.length === 0 && (
+                <Text size="xs" c="dimmed">All {unchanged.length} checks unchanged between these reviews.</Text>
+              )}
+            </Stack>
+          </Box>
+        )
+      })}
+
+      {/* ── Full Review History ── */}
+      <Box>
+        <Text fw={700} size="sm" mb="sm">Full History ({sorted.length} {sorted.length === 1 ? 'review' : 'reviews'})</Text>
+        <Accordion chevronPosition="left" variant="separated">
+          {[...sorted].reverse().map(r => {
+            const passed  = (r.sections ?? []).flatMap(s => s.items).filter(i => i.status === 'Passed').length
+            const total   = (r.sections ?? []).flatMap(s => s.items).length
+            const overall = r.overall ?? ''
+            return (
+              <Accordion.Item key={r.id} value={String(r.id)}>
+                <Accordion.Control>
+                  <Group gap="xs" wrap="nowrap">
+                    <Badge size="xs" color={r.agent_color || 'gray'} variant="light">
+                      {r.agent_label}
+                    </Badge>
+                    <Text size="xs" c="dimmed">v{r.version_num}</Text>
+                    <Badge size="xs"
+                      color={overall === 'Passed' ? 'green' : overall === 'Needs Revision' ? 'orange' : 'red'}
+                      variant="filled">
+                      {r.score}/100
+                    </Badge>
+                    <Text size="xs" c="dimmed">{passed}/{total} passed</Text>
+                    <Text size="xs" c="dimmed" style={{ marginLeft: 'auto' }}>
+                      {new Date(r.run_at + 'Z').toLocaleString()}
+                    </Text>
+                  </Group>
+                </Accordion.Control>
+                <Accordion.Panel>
+                  <Stack gap="sm">
+                    {r.summary && (
+                      <Text size="xs" c="dimmed" fs="italic">{r.summary}</Text>
+                    )}
+                    {(r.sections ?? []).map(sec => {
+                      const secPassed = sec.items.filter(i => i.status === 'Passed').length
+                      return (
+                        <Box key={sec.title}>
+                          <Group gap="xs" mb={6}>
+                            <Text size="xs" fw={700}>{sec.title}</Text>
+                            <Badge size="xs" variant="outline" color="gray">
+                              {secPassed}/{sec.items.length}
+                            </Badge>
+                          </Group>
+                          <Stack gap={4}>
+                            {sec.items.map(item => (
+                              <Group key={item.label} gap="xs" align="flex-start" wrap="nowrap">
+                                <Badge size="xs" color={STATUS_COLOR[item.status as CheckStatus] ?? 'gray'}
+                                  variant="light" style={{ flexShrink: 0, marginTop: 2 }}>
+                                  {item.status}
+                                </Badge>
+                                <Box>
+                                  <Text size="xs" fw={500}>{item.label}</Text>
+                                  {item.note && <Text size="xs" c="dimmed">{item.note}</Text>}
+                                </Box>
+                              </Group>
+                            ))}
+                          </Stack>
+                        </Box>
+                      )
+                    })}
+                  </Stack>
+                </Accordion.Panel>
+              </Accordion.Item>
+            )
+          })}
+        </Accordion>
+      </Box>
+
+      <Text size="xs" c="dimmed" ta="center" pb="xs">
+        Review tracking active since first stored review · all future reviews saved automatically
+      </Text>
+    </Stack>
+  )
+}
+
+// ── Course Detail ─────────────────────────────────────────────────────────────
+
 function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
   const [versions,   setVersions]   = useState<CourseVersion[]>([])
   const [selVid,     setSelVid]     = useState<number | null>(null)
@@ -59,11 +316,16 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
   const [deleting,   setDeleting]   = useState(false)
   const [confirmCourse, setConfirmCourse] = useState(false)
   const [deletingCourse, setDeletingCourse] = useState(false)
+  const [lastReviews,   setLastReviews]   = useState<PersistedReview[]>([])
+  const [deploys,       setDeploys]       = useState<MoodleDeploy[]>([])
+  const [allReviews,    setAllReviews]    = useState<PersistedReview[]>([])
+  const [progressOpen,  setProgressOpen]  = useState(false)
+  const [diffOpen,      setDiffOpen]      = useState(false)
 
   // Deploy to Moodle
   const [deployOpen,       setDeployOpen]       = useState(false)
   const [deploying,        setDeploying]         = useState(false)
-  const [deployResult,     setDeployResult]      = useState<{ moodle_course_id: number; url: string; sections_pushed: number } | null>(null)
+  const [deployResult,     setDeployResult]      = useState<{ moodle_course_id: number; url: string; sections_pushed: number; forums_seeded: number } | null>(null)
   const [moodleCategories, setMoodleCategories]  = useState<{ value: string; label: string }[]>([])
   const [deploySn,         setDeploySn]          = useState('')
   const [deployFn,         setDeployFn]          = useState('')
@@ -97,9 +359,10 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
         end_date:    deployEnd,
       })
       setDeployResult(res)
+      if (selVid) api.moodle.deploys(selVid).then(setDeploys).catch(() => {})
       notifications.show({
         title:   'Deployed to Moodle',
-        message: `${deploySn} — ${res.sections_pushed} sections pushed`,
+        message: `${deploySn} — ${res.sections_pushed} sections, ${res.forums_seeded} forums seeded`,
         color:   'green',
       })
     } catch (e: any) {
@@ -109,12 +372,13 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
     }
   }
 
-  // Load versions when course changes
+  // Load versions + all course-level reviews when course changes
   useEffect(() => {
     setVersions([])
     setContent(null)
     setSelVid(null)
     setLoadingV(true)
+    setAllReviews([])
     api.courses.versions(course.shortname)
       .then(vers => {
         setVersions(vers)
@@ -122,15 +386,28 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       })
       .catch(e => notifications.show({ title: 'Error', message: e.message, color: 'red' }))
       .finally(() => setLoadingV(false))
+    api.courses.listReviews(course.shortname)
+      .then(setAllReviews)
+      .catch(() => {})
   }, [course.shortname])
 
   // Load full content when selected version changes
   useEffect(() => {
     if (!selVid) return
     setContent(null)
+    setLastReviews([])
     api.courses.version(course.shortname, selVid)
       .then(v => setContent((v.content as any) ?? {}))
       .catch(() => setContent({}))
+    api.courses.listReviews(course.shortname, selVid)
+      .then(setLastReviews)
+      .catch(() => {})
+    api.courses.listReviews(course.shortname)
+      .then(setAllReviews)
+      .catch(() => {})
+    api.moodle.deploys(selVid)
+      .then(setDeploys)
+      .catch(() => setDeploys([]))
   }, [selVid, course.shortname])
 
   const selectedVersion = versions.find(v => v.id === selVid)
@@ -199,6 +476,12 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
             </Group>
           </Box>
           <Group gap={4} style={{ flexShrink: 0 }}>
+            <Tooltip label={`Progress Report (${allReviews.length} reviews)`}>
+              <ActionIcon size="sm" variant="light" color="indigo"
+                          onClick={() => setProgressOpen(true)}>
+                <IconChartBar size={14} />
+              </ActionIcon>
+            </Tooltip>
             {confirmCourse ? (
               <DeleteConfirm
                 onConfirm={handleDeleteCourse}
@@ -256,6 +539,24 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <IconDownload size={14} />
                     </ActionIcon>
                   </Tooltip>
+                  <Tooltip label="Print / Export HTML">
+                    <ActionIcon
+                      size="sm" variant="light" color="teal"
+                      component="a"
+                      href={api.courses.exportHtmlUrl(course.shortname, selectedVersion.id)}
+                      target="_blank"
+                    >
+                      <IconPrinter size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                  {versions.length >= 2 && (
+                    <Tooltip label="Compare versions">
+                      <ActionIcon size="sm" variant="light" color="violet"
+                                  onClick={() => setDiffOpen(true)}>
+                        <IconGitCompare size={14} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
                   <Tooltip label="Deploy to Moodle">
                     <ActionIcon size="sm" variant="light" color="blue"
                                 onClick={() => openDeploy(selectedVersion)}>
@@ -281,7 +582,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
             </Group>
 
             {selectedVersion && (
-              <Group gap="xs" mt="xs">
+              <Group gap="xs" mt="xs" wrap="wrap">
                 <Text size="xs" c="dimmed">
                   {selectedVersion.start_date || '—'} → {selectedVersion.end_date || '—'}
                 </Text>
@@ -289,6 +590,36 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                 <Text size="xs" c="dimmed">
                   Created {new Date(selectedVersion.created_at).toLocaleDateString()}
                 </Text>
+                {lastReviews.length > 0 && (() => {
+                  const worst = [...lastReviews].sort((a, b) => (a.score ?? 100) - (b.score ?? 100))[0]
+                  const color = worst.error ? 'red'
+                    : worst.overall === 'Passed' ? 'green'
+                    : worst.overall === 'Needs Revision' ? 'orange' : 'red'
+                  return (
+                    <>
+                      <Text size="xs" c="dimmed">·</Text>
+                      <Badge size="xs" color={color} variant="light">
+                        Last review: {worst.overall ?? 'Error'}{worst.score != null ? ` ${worst.score}/100` : ''} · {relativeTime(worst.run_at)}
+                      </Badge>
+                    </>
+                  )
+                })()}
+                {deploys.length > 0 && (() => {
+                  const latest = deploys[0]
+                  return (
+                    <>
+                      <Text size="xs" c="dimmed">·</Text>
+                      <Anchor href={latest.moodle_url} target="_blank" size="xs">
+                        <Group gap={4} wrap="nowrap">
+                          <IconCloudUpload size={11} />
+                          Deployed {relativeTime(latest.deployed_at)}
+                          {latest.forums_seeded > 0 && ` · ${latest.forums_seeded} forums`}
+                          <IconExternalLink size={11} />
+                        </Group>
+                      </Anchor>
+                    </>
+                  )
+                })()}
               </Group>
             )}
           </>
@@ -314,12 +645,57 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
         </Group>
       )}
 
-      {/* Module accordion */}
+      {/* Module accordion + quiz */}
       {content && (
-        <CourseViewer content={content} moodleCourseId={content.moodle_course_id} />
+        <CourseViewer
+          content={content}
+          moodleCourseId={content.moodle_course_id}
+          bibleValidation={selVid ? { shortname: course.shortname, versionId: selVid } : undefined}
+          onFieldEdit={selVid
+            ? async (moduleNum, field, value) => {
+                await api.courses.patchField(course.shortname, selVid, { module_num: moduleNum, field, value })
+              }
+            : undefined
+          }
+          onQuizSave={selVid
+            ? async questions => {
+                await api.courses.saveQuiz(course.shortname, selVid, questions)
+                const v = await api.courses.version(course.shortname, selVid)
+                setContent((v.content as any) ?? {})
+              }
+            : undefined
+          }
+        />
       )}
 
       {!content && selVid && <Loader size="sm" />}
+
+      {/* Course Progress Report modal */}
+      <Modal
+        opened={progressOpen}
+        onClose={() => setProgressOpen(false)}
+        title={
+          <Group gap="xs">
+            <IconChartBar size={16} />
+            <Text fw={700} size="sm">Course Progress Report — {course.shortname}</Text>
+            {allReviews.length > 0 && (
+              <Badge size="xs" color="indigo" variant="light">{allReviews.length} reviews</Badge>
+            )}
+          </Group>
+        }
+        size="xl"
+        scrollAreaComponent={ScrollArea.Autosize}
+      >
+        <CourseProgressReport reviews={allReviews} />
+      </Modal>
+
+      {/* Version diff modal */}
+      <VersionDiff
+        opened={diffOpen}
+        onClose={() => setDiffOpen(false)}
+        shortname={course.shortname}
+        versions={versions}
+      />
 
       {/* Deploy to Moodle modal */}
       <Modal
@@ -331,10 +707,14 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
         {deployResult ? (
           <Stack gap="sm">
             <Text size="sm" c="green" fw={500}>
-              Course created successfully — {deployResult.sections_pushed} sections pushed.
+              Course created successfully!
             </Text>
-            <Group gap="xs">
-              <Text size="sm">Moodle course ID: <strong>{deployResult.moodle_course_id}</strong></Text>
+            <Group gap="xs" wrap="wrap">
+              <Badge size="sm" color="blue" variant="light">{deployResult.sections_pushed} sections</Badge>
+              {deployResult.forums_seeded > 0 && (
+                <Badge size="sm" color="teal" variant="light">{deployResult.forums_seeded} forums seeded</Badge>
+              )}
+              <Badge size="sm" color="gray" variant="light">ID #{deployResult.moodle_course_id}</Badge>
             </Group>
             <Anchor href={deployResult.url} target="_blank" size="sm">
               <Group gap={4}>
@@ -381,8 +761,8 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
               />
             </Group>
             <Text size="xs" c="dimmed">
-              This creates a new course in Moodle and pushes section names and lecture content.
-              Enrollments, activities, and quiz questions are not included.
+              Creates a new Moodle course and pushes section names, lecture content, and
+              forum discussion questions. Enrollments and quiz questions are not included.
             </Text>
             <Group justify="flex-end" gap="xs">
               <Button variant="subtle" onClick={() => setDeployOpen(false)}>Cancel</Button>

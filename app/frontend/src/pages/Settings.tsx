@@ -3,7 +3,7 @@ import {
   Stack, TextInput, PasswordInput, Button, Group,
   Title, Text, Alert, Badge, Paper, Loader,
   ActionIcon, Tooltip, ThemeIcon, SimpleGrid, Progress,
-  Box, Divider,
+  Box, Divider, Select, Collapse,
 } from '@mantine/core'
 import { useForm } from '@mantine/form'
 import { notifications } from '@mantine/notifications'
@@ -14,8 +14,9 @@ import {
   IconEyeOff, IconShield, IconDeviceMobile,
   IconApi, IconRefresh, IconSchool, IconRobot,
   IconBrain, IconServer, IconExternalLink,
+  IconClock, IconCalendarEvent,
 } from '@tabler/icons-react'
-import { api, type AppSettings, type MoodleInstance, type MoodleStats } from '../api/client'
+import { api, type AppSettings, type MoodleInstance, type MoodleStats, type ReviewSchedule } from '../api/client'
 
 // ── LLM provider presets ──────────────────────────────────────────────────────
 
@@ -241,6 +242,246 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
   )
 }
 
+// ── Scheduled reviews section ─────────────────────────────────────────────────
+
+const SCHED_AGENTS = [
+  {
+    id: 'theological-reviewer', label: 'Theological Reviewer', color: 'violet',
+    context: `# Role: Evangelical Theological Course Reviewer\nYou are a senior academic auditor for a conservative Protestant/Evangelical theological college. Audit the course for biblical soundness, academic rigor, structural completeness (syllabus, glossary, bibliography, 5 modules, 30+ quiz questions, discussion forums), and Evangelical alignment.`,
+  },
+  {
+    id: 'student-critic', label: 'Student Critic', color: 'orange',
+    context: `# Role: Evangelical Student & Content Critic\nYou are a high-achieving, critical-thinking student at an Evangelical Theological College. Stress-test the course content for theological depth, modern relevance, practical application, and assignment fairness.`,
+  },
+]
+
+function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
+  const [schedules,   setSchedules]   = useState<ReviewSchedule[]>([])
+  const [courses,     setCourses]     = useState<{ value: string; label: string }[]>([])
+  const [loading,     setLoading]     = useState(false)
+  const [running,     setRunning]     = useState(false)
+  const [showForm,    setShowForm]    = useState(false)
+  const [deleting,    setDeleting]    = useState<number | null>(null)
+  const [newShort,    setNewShort]    = useState<string | null>(null)
+  const [newAgent,    setNewAgent]    = useState<string>(SCHED_AGENTS[0].id)
+  const [newFreq,     setNewFreq]     = useState<string>('weekly')
+  const [newModel,    setNewModel]    = useState(defaultModel)
+  const [saving,      setSaving]      = useState(false)
+
+  const load = () => {
+    setLoading(true)
+    Promise.all([
+      api.schedules.list(),
+      api.courses.list(),
+    ]).then(([scheds, libCourses]) => {
+      setSchedules(scheds)
+      setCourses(libCourses.map(c => ({ value: c.shortname, label: `${c.shortname} — ${c.fullname}` })))
+    }).catch(e => notifications.show({ title: 'Error', message: e.message, color: 'red' }))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const overdueCount = schedules.filter(s =>
+    s.enabled && new Date(s.next_run_at + 'Z') <= new Date()
+  ).length
+
+  const runOverdue = async () => {
+    setRunning(true)
+    try {
+      const res = await api.schedules.runOverdue()
+      notifications.show({
+        title: `${res.triggered} review${res.triggered !== 1 ? 's' : ''} completed`,
+        message: res.errors.length > 0 ? `Errors: ${res.errors.join(', ')}` : 'All scheduled reviews ran successfully.',
+        color: res.errors.length > 0 ? 'orange' : 'green',
+      })
+      load()
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const createSchedule = async () => {
+    if (!newShort) return
+    const agent = SCHED_AGENTS.find(a => a.id === newAgent)!
+    setSaving(true)
+    try {
+      await api.schedules.create({
+        shortname:     newShort,
+        agent_id:      agent.id,
+        agent_label:   agent.label,
+        agent_color:   agent.color,
+        agent_context: agent.context,
+        model_id:      newModel,
+        frequency:     newFreq,
+      })
+      notifications.show({ title: 'Schedule created', message: `${newShort} will be reviewed ${newFreq}`, color: 'green' })
+      setShowForm(false)
+      load()
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const removeSchedule = async (id: number) => {
+    setDeleting(id)
+    try {
+      await api.schedules.delete(id)
+      setSchedules(prev => prev.filter(s => s.id !== id))
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const fmtDate = (iso: string | null) => {
+    if (!iso) return '—'
+    return new Date(iso + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  }
+
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group justify="space-between" mb="sm" wrap="nowrap">
+        <Group gap="sm">
+          <ThemeIcon size="sm" color="violet" variant="light">
+            <IconCalendarEvent size={12} />
+          </ThemeIcon>
+          <Title order={5}>Scheduled Reviews</Title>
+          {overdueCount > 0 && (
+            <Badge size="xs" color="orange">{overdueCount} overdue</Badge>
+          )}
+        </Group>
+        <Group gap="xs">
+          {overdueCount > 0 && (
+            <Button
+              size="xs" color="orange" variant="light"
+              leftSection={running ? <Loader size="xs" /> : <IconPlayerPlay size={14} />}
+              onClick={runOverdue}
+              disabled={running}
+            >
+              Run {overdueCount} overdue
+            </Button>
+          )}
+          <Button
+            size="xs" variant="light"
+            leftSection={<IconPlus size={14} />}
+            onClick={() => setShowForm(f => !f)}
+          >
+            {showForm ? 'Cancel' : 'Add Schedule'}
+          </Button>
+        </Group>
+      </Group>
+
+      {/* Add schedule form */}
+      <Collapse in={showForm}>
+        <Paper withBorder p="sm" radius="sm" mb="sm" bg="var(--mantine-color-gray-0)">
+          <Stack gap="sm">
+            <Group grow gap="sm">
+              <Select
+                label="Course"
+                placeholder="Select a course"
+                data={courses}
+                value={newShort}
+                onChange={setNewShort}
+                searchable
+                size="xs"
+              />
+              <Select
+                label="Agent"
+                data={SCHED_AGENTS.map(a => ({ value: a.id, label: a.label }))}
+                value={newAgent}
+                onChange={v => setNewAgent(v ?? SCHED_AGENTS[0].id)}
+                size="xs"
+              />
+            </Group>
+            <Group grow gap="sm">
+              <Select
+                label="Frequency"
+                data={[
+                  { value: 'daily',   label: 'Daily' },
+                  { value: 'weekly',  label: 'Weekly' },
+                  { value: 'monthly', label: 'Monthly' },
+                ]}
+                value={newFreq}
+                onChange={v => setNewFreq(v ?? 'weekly')}
+                size="xs"
+              />
+              <TextInput
+                label="Model ID"
+                placeholder="e.g. local-model or gpt-4o"
+                value={newModel}
+                onChange={e => setNewModel(e.currentTarget.value)}
+                size="xs"
+              />
+            </Group>
+            <Group justify="flex-end">
+              <Button
+                size="xs"
+                leftSection={saving ? <Loader size="xs" /> : <IconCheck size={14} />}
+                onClick={createSchedule}
+                disabled={!newShort || saving}
+              >
+                Save Schedule
+              </Button>
+            </Group>
+          </Stack>
+        </Paper>
+      </Collapse>
+
+      {/* Schedule list */}
+      {loading && <Loader size="sm" />}
+      {!loading && schedules.length === 0 && (
+        <Text size="xs" c="dimmed" ta="center" py="md">
+          No schedules yet — add one to auto-review courses periodically.
+        </Text>
+      )}
+      {schedules.map(s => {
+        const isOverdue = s.enabled === 1 && new Date(s.next_run_at + 'Z') <= new Date()
+        return (
+          <Paper key={s.id} withBorder p="sm" radius="sm" mb="xs"
+                 style={{ borderColor: isOverdue ? 'var(--mantine-color-orange-4)' : undefined }}>
+            <Group justify="space-between" wrap="nowrap">
+              <Box>
+                <Group gap={6} mb={2}>
+                  <Text size="sm" fw={600}>{s.shortname}</Text>
+                  <Badge size="xs" color={SCHED_AGENTS.find(a => a.id === s.agent_id)?.color || 'gray'}>
+                    {s.agent_label}
+                  </Badge>
+                  <Badge size="xs" variant="outline">{s.frequency}</Badge>
+                  {isOverdue && <Badge size="xs" color="orange">overdue</Badge>}
+                </Group>
+                <Group gap={8}>
+                  <Group gap={4}>
+                    <IconClock size={11} />
+                    <Text size="xs" c="dimmed">Next: {fmtDate(s.next_run_at)}</Text>
+                  </Group>
+                  {s.last_run_at && (
+                    <Text size="xs" c="dimmed">Last: {fmtDate(s.last_run_at)}</Text>
+                  )}
+                </Group>
+              </Box>
+              <Tooltip label="Delete schedule" withArrow>
+                <ActionIcon
+                  size="sm" color="red" variant="subtle"
+                  loading={deleting === s.id}
+                  onClick={() => removeSchedule(s.id)}
+                >
+                  <IconTrash size={13} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          </Paper>
+        )
+      })}
+    </Paper>
+  )
+}
+
 // ── Settings page ─────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -260,6 +501,7 @@ export default function SettingsPage() {
   const [llmApiKey,   setLlmApiKey]     = useState('')
   const [llmKeyMask,  setLlmKeyMask]    = useState('')
   const [savingLlm,   setSavingLlm]     = useState(false)
+  const [lastModel,   setLastModel]     = useState('')
 
   const form = useForm({
     initialValues: { moodle_url: '', moodle_token: '', llm_url: '' },
@@ -284,6 +526,7 @@ export default function SettingsPage() {
     ])
     form.setValues({ moodle_url: s.moodle_url, moodle_token: '', llm_url: s.llm_url })
     setLlmKeyMask(s.llm_api_key_masked || '')
+    setLastModel(s.last_model || '')
     // Detect provider from saved URL
     const savedUrl = s.llm_url || ''
     const matched = LLM_PROVIDERS.find(p => p.id !== 'local' && p.id !== 'custom' && p.url && savedUrl.startsWith(p.url))
@@ -493,7 +736,7 @@ export default function SettingsPage() {
           <Stack gap="sm">
             <TextInput
               label="Moodle URL"
-              placeholder="https://biblos.moodlecloud.com"
+              placeholder="https://your-moodle.example.com"
               {...form.getInputProps('moodle_url')}
             />
             <PasswordInput
@@ -634,6 +877,8 @@ export default function SettingsPage() {
             </Group>
           </Stack>
         </Paper>
+
+        <ScheduledReviewsSection defaultModel={lastModel} />
       </Stack>
 
       {/* ── Site Overview (right column, fills remaining width) ───────── */}

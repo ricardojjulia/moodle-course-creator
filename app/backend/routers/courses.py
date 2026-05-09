@@ -23,6 +23,9 @@ from ..database import (
     list_courses, get_course, upsert_course,
     list_versions, get_version, save_version, update_version_content,
     record_build, get_settings, delete_course, delete_version,
+    save_review, list_reviews, list_recent_reviews, delete_review,
+    save_schedule, list_schedules, delete_schedule,
+    get_overdue_schedules, update_schedule_run,
 )
 
 router = APIRouter(prefix="/courses", tags=["courses"])
@@ -483,9 +486,10 @@ def _extract_json_block(text: str) -> str:
 
 @router.post("/{shortname}/review")
 def review_course(shortname: str, body: dict):
-    """Run an autonomous LLM audit on the latest version of a course."""
+    """Run an autonomous LLM audit on a course version (defaults to latest)."""
     agent_context = (body.get("agent_context") or "").strip()
     model_id      = (body.get("model_id")      or "").strip()
+    version_id    = body.get("version_id")
 
     if not agent_context:
         raise HTTPException(400, detail="agent_context is required and cannot be empty")
@@ -494,7 +498,12 @@ def review_course(shortname: str, body: dict):
     if not vers:
         raise HTTPException(404, detail=f"No versions found for '{shortname}'")
 
-    ver = get_version(vers[0]["id"])
+    if version_id:
+        ver = get_version(int(version_id))
+        if not ver or ver.get("shortname") != shortname:
+            raise HTTPException(404, detail=f"Version {version_id} not found for '{shortname}'")
+    else:
+        ver = get_version(vers[0]["id"])
     if not ver:
         raise HTTPException(404, detail="Version record not found")
 
@@ -536,11 +545,22 @@ def review_course(shortname: str, body: dict):
     if result is None:
         raise HTTPException(500, detail=f"LLM returned non-JSON: {raw[:300]}")
 
-    return {
+    response = {
         "shortname":   shortname,
         "version_num": ver.get("version_num"),
         **result,
     }
+
+    # Persist to DB — agent metadata comes from body if the frontend provides it
+    agent_id    = (body.get("agent_id")    or "").strip()
+    agent_label = (body.get("agent_label") or agent_id or "Reviewer").strip()
+    agent_color = (body.get("agent_color") or "gray").strip()
+    save_review(
+        shortname, ver.get("id"), ver.get("version_num"),
+        agent_id, agent_label, agent_color, response,
+    )
+
+    return response
 
 
 # ── Regenerate course from review feedback ────────────────────────────────────
@@ -723,6 +743,756 @@ def finalize_review(shortname: str, version_id: int, body: dict):
 
     update_version_content(version_id, content)
     return get_version(version_id)
+
+
+# ── Inline field edit ─────────────────────────────────────────────────────────
+
+@router.patch("/{shortname}/versions/{version_id}/field")
+def patch_version_field(shortname: str, version_id: int, body: dict):
+    """Update a single field inside a module's content without LLM regeneration."""
+    module_num = body.get("module_num")
+    field      = (body.get("field") or "").strip()
+    value      = body.get("value", "")
+
+    if not field:
+        raise HTTPException(400, "field is required")
+
+    ALLOWED_FIELDS = {"lecture_html", "forum_question", "discussion_question", "summary"}
+    if field not in ALLOWED_FIELDS:
+        raise HTTPException(400, f"field must be one of {sorted(ALLOWED_FIELDS)}")
+
+    v = get_version(version_id)
+    if not v or v.get("shortname") != shortname:
+        raise HTTPException(404, "Version not found")
+
+    content = v["content"]
+
+    if module_num is not None:
+        mc_list = content.get("module_contents", [])
+        for i, item in enumerate(mc_list):
+            if item.get("module_num") == int(module_num):
+                mc_list[i][field] = value
+                break
+        content["module_contents"] = mc_list
+    else:
+        content[field] = value
+
+    update_version_content(version_id, content)
+    return {"ok": True}
+
+
+# ── Review history ────────────────────────────────────────────────────────────
+
+@router.get("/{shortname}/reviews")
+def get_course_reviews(shortname: str, version_id: int = None):
+    return list_reviews(shortname, version_id=version_id)
+
+
+@router.delete("/{shortname}/reviews/{review_id}")
+def remove_review(shortname: str, review_id: int):
+    if not delete_review(review_id):
+        raise HTTPException(404, "Review not found")
+    return {"deleted": review_id}
+
+
+@router.get("/reviews/recent")
+def get_recent_reviews(limit: int = 100):
+    return list_recent_reviews(limit)
+
+
+# ── Quiz editor ───────────────────────────────────────────────────────────────
+
+@router.put("/{shortname}/versions/{version_id}/quiz")
+def save_quiz(shortname: str, version_id: int, body: dict):
+    """Replace the full quiz question bank for a version."""
+    questions = body.get("questions", [])
+    v = get_version(version_id)
+    if not v or v.get("shortname") != shortname:
+        raise HTTPException(404, "Version not found")
+    content = v["content"]
+    content["quiz_questions"] = questions
+    update_version_content(version_id, content)
+    return {"ok": True, "count": len(questions)}
+
+
+# ── Bible Reference Validator ─────────────────────────────────────────────────
+
+# Maps Spanish AND English abbreviations/full-names → (canonical Spanish name, max chapters).
+# English entries resolve to the same Spanish canonical name so output is consistent.
+_BIBLE_BOOKS: dict[str, tuple[str, int]] = {
+    # ══ OLD TESTAMENT ══════════════════════════════════════════════════════════
+    # Genesis
+    "gn": ("Génesis", 50), "gén": ("Génesis", 50), "gen": ("Génesis", 50),
+    "génesis": ("Génesis", 50), "genesis": ("Génesis", 50),
+    "ge": ("Génesis", 50),                                          # EN abbrev
+    # Exodus
+    "ex": ("Éxodo", 40), "éx": ("Éxodo", 40), "éxodo": ("Éxodo", 40), "exodo": ("Éxodo", 40),
+    "exod": ("Éxodo", 40), "exodus": ("Éxodo", 40),                 # EN
+    # Leviticus
+    "lv": ("Levítico", 27), "lev": ("Levítico", 27), "levítico": ("Levítico", 27),
+    "le": ("Levítico", 27), "leviticus": ("Levítico", 27),          # EN
+    # Numbers
+    "nm": ("Números", 36), "núm": ("Números", 36), "num": ("Números", 36), "números": ("Números", 36),
+    "numb": ("Números", 36), "numbers": ("Números", 36),            # EN
+    # Deuteronomy
+    "dt": ("Deuteronomio", 34), "deut": ("Deuteronomio", 34), "deuteronomio": ("Deuteronomio", 34),
+    "deu": ("Deuteronomio", 34), "de": ("Deuteronomio", 34), "deuteronomy": ("Deuteronomio", 34),  # EN
+    # Joshua
+    "jos": ("Josué", 24), "josué": ("Josué", 24), "josue": ("Josué", 24),
+    "josh": ("Josué", 24), "joshua": ("Josué", 24),                 # EN
+    # Judges
+    "jue": ("Jueces", 21), "jueces": ("Jueces", 21),
+    "judg": ("Jueces", 21), "jdg": ("Jueces", 21), "jg": ("Jueces", 21), "judges": ("Jueces", 21),  # EN
+    # Ruth
+    "rt": ("Rut", 4), "rut": ("Rut", 4),
+    "ru": ("Rut", 4), "ruth": ("Rut", 4),                           # EN
+    # 1 Samuel
+    "1s": ("1 Samuel", 31), "1sam": ("1 Samuel", 31), "1 sam": ("1 Samuel", 31), "1 samuel": ("1 Samuel", 31),
+    "1sa": ("1 Samuel", 31), "1 sa": ("1 Samuel", 31), "1samuel": ("1 Samuel", 31),  # EN
+    # 2 Samuel
+    "2s": ("2 Samuel", 24), "2sam": ("2 Samuel", 24), "2 sam": ("2 Samuel", 24), "2 samuel": ("2 Samuel", 24),
+    "2sa": ("2 Samuel", 24), "2 sa": ("2 Samuel", 24), "2samuel": ("2 Samuel", 24),  # EN
+    # 1 Kings
+    "1r": ("1 Reyes", 22), "1re": ("1 Reyes", 22), "1rey": ("1 Reyes", 22), "1 reyes": ("1 Reyes", 22),
+    "1 kgs": ("1 Reyes", 22), "1kgs": ("1 Reyes", 22), "1ki": ("1 Reyes", 22),      # EN
+    "1 ki": ("1 Reyes", 22), "1kings": ("1 Reyes", 22), "1 kings": ("1 Reyes", 22), # EN
+    # 2 Kings
+    "2r": ("2 Reyes", 25), "2re": ("2 Reyes", 25), "2rey": ("2 Reyes", 25), "2 reyes": ("2 Reyes", 25),
+    "2 kgs": ("2 Reyes", 25), "2kgs": ("2 Reyes", 25), "2ki": ("2 Reyes", 25),      # EN
+    "2 ki": ("2 Reyes", 25), "2kings": ("2 Reyes", 25), "2 kings": ("2 Reyes", 25), # EN
+    # 1 Chronicles
+    "1cr": ("1 Crónicas", 29), "1cro": ("1 Crónicas", 29), "1 crónicas": ("1 Crónicas", 29),
+    "1 chr": ("1 Crónicas", 29), "1chr": ("1 Crónicas", 29), "1ch": ("1 Crónicas", 29),   # EN
+    "1chron": ("1 Crónicas", 29), "1 chron": ("1 Crónicas", 29),                           # EN
+    "1chronicles": ("1 Crónicas", 29), "1 chronicles": ("1 Crónicas", 29),                 # EN
+    # 2 Chronicles
+    "2cr": ("2 Crónicas", 36), "2cro": ("2 Crónicas", 36), "2 crónicas": ("2 Crónicas", 36),
+    "2 chr": ("2 Crónicas", 36), "2chr": ("2 Crónicas", 36), "2ch": ("2 Crónicas", 36),   # EN
+    "2chron": ("2 Crónicas", 36), "2 chron": ("2 Crónicas", 36),                           # EN
+    "2chronicles": ("2 Crónicas", 36), "2 chronicles": ("2 Crónicas", 36),                 # EN
+    # Ezra
+    "esd": ("Esdras", 10), "esdras": ("Esdras", 10),
+    "ezr": ("Esdras", 10), "ezra": ("Esdras", 10),                  # EN
+    # Nehemiah
+    "neh": ("Nehemías", 13), "nehemías": ("Nehemías", 13), "nehemias": ("Nehemías", 13),
+    "ne": ("Nehemías", 13), "nehemiah": ("Nehemías", 13),           # EN
+    # Esther
+    "est": ("Ester", 10), "ester": ("Ester", 10),
+    "esth": ("Ester", 10), "esther": ("Ester", 10),                 # EN
+    # Job
+    "job": ("Job", 42),
+    # Psalms
+    "sal": ("Salmos", 150), "sl": ("Salmos", 150), "salmo": ("Salmos", 150), "salmos": ("Salmos", 150),
+    "ps": ("Salmos", 150), "psa": ("Salmos", 150), "psalm": ("Salmos", 150), "psalms": ("Salmos", 150),  # EN
+    # Proverbs
+    "pr": ("Proverbios", 31), "pro": ("Proverbios", 31), "prov": ("Proverbios", 31), "proverbios": ("Proverbios", 31),
+    "prv": ("Proverbios", 31), "proverbs": ("Proverbios", 31),      # EN
+    # Ecclesiastes
+    "ec": ("Eclesiastés", 12), "ecl": ("Eclesiastés", 12), "ecles": ("Eclesiastés", 12), "eclesiastés": ("Eclesiastés", 12),
+    "eccl": ("Eclesiastés", 12), "ecc": ("Eclesiastés", 12),        # EN
+    "ecclesiastes": ("Eclesiastés", 12), "qoh": ("Eclesiastés", 12), "qoheleth": ("Eclesiastés", 12),  # EN
+    # Song of Solomon / Cantares
+    "cnt": ("Cantares", 8), "cant": ("Cantares", 8), "cantar": ("Cantares", 8), "cantares": ("Cantares", 8),
+    "song": ("Cantares", 8), "ss": ("Cantares", 8), "sos": ("Cantares", 8),  # EN
+    "songofsolomon": ("Cantares", 8), "songofsongs": ("Cantares", 8),         # EN (no spaces)
+    # Isaiah
+    "is": ("Isaías", 66), "isa": ("Isaías", 66), "isaías": ("Isaías", 66), "isaias": ("Isaías", 66),
+    "isaiah": ("Isaías", 66),                                        # EN
+    # Jeremiah
+    "jr": ("Jeremías", 52), "jer": ("Jeremías", 52), "jeremías": ("Jeremías", 52), "jeremias": ("Jeremías", 52),
+    "je": ("Jeremías", 52), "jeremiah": ("Jeremías", 52),           # EN
+    # Lamentations
+    "lm": ("Lamentaciones", 5), "lam": ("Lamentaciones", 5), "lamentaciones": ("Lamentaciones", 5),
+    "la": ("Lamentaciones", 5), "lamentations": ("Lamentaciones", 5),  # EN
+    # Ezekiel
+    "ez": ("Ezequiel", 48), "eze": ("Ezequiel", 48), "ezequiel": ("Ezequiel", 48),
+    "ezek": ("Ezequiel", 48), "ezekiel": ("Ezequiel", 48),          # EN
+    # Daniel
+    "dn": ("Daniel", 12), "dan": ("Daniel", 12), "daniel": ("Daniel", 12),
+    "da": ("Daniel", 12),                                            # EN
+    # Hosea
+    "os": ("Oseas", 14), "ose": ("Oseas", 14), "oseas": ("Oseas", 14),
+    "hos": ("Oseas", 14), "ho": ("Oseas", 14), "hosea": ("Oseas", 14),  # EN
+    # Joel
+    "jl": ("Joel", 3), "joel": ("Joel", 3),
+    # Amos
+    "am": ("Amós", 9), "amós": ("Amós", 9), "amos": ("Amós", 9),
+    # Obadiah
+    "abd": ("Abdías", 1), "ob": ("Abdías", 1), "abdías": ("Abdías", 1),
+    "obad": ("Abdías", 1), "obadiah": ("Abdías", 1),                # EN
+    # Jonah
+    "jon": ("Jonás", 4), "jonás": ("Jonás", 4), "jonas": ("Jonás", 4),
+    "jnh": ("Jonás", 4), "jonah": ("Jonás", 4),                     # EN
+    # Micah
+    "miq": ("Miqueas", 7), "mi": ("Miqueas", 7), "miqueas": ("Miqueas", 7),
+    "mic": ("Miqueas", 7), "micah": ("Miqueas", 7),                 # EN
+    # Nahum
+    "nah": ("Nahúm", 3), "nahúm": ("Nahúm", 3), "nahum": ("Nahúm", 3),
+    "na": ("Nahúm", 3),                                             # EN
+    # Habakkuk
+    "hab": ("Habacuc", 3), "habacuc": ("Habacuc", 3),
+    "hb": ("Habacuc", 3), "habakkuk": ("Habacuc", 3),              # EN
+    # Zephaniah
+    "sof": ("Sofonías", 3), "sf": ("Sofonías", 3), "sofonías": ("Sofonías", 3),
+    "zeph": ("Sofonías", 3), "zep": ("Sofonías", 3), "zp": ("Sofonías", 3), "zephaniah": ("Sofonías", 3),  # EN
+    # Haggai
+    "hag": ("Hageo", 2), "ag": ("Hageo", 2), "hageo": ("Hageo", 2),
+    "hg": ("Hageo", 2), "haggai": ("Hageo", 2),                     # EN
+    # Zechariah
+    "zac": ("Zacarías", 14), "zacarías": ("Zacarías", 14), "zacarias": ("Zacarías", 14),
+    "zech": ("Zacarías", 14), "zec": ("Zacarías", 14), "zch": ("Zacarías", 14), "zechariah": ("Zacarías", 14),  # EN
+    # Malachi
+    "mal": ("Malaquías", 4), "malaquías": ("Malaquías", 4), "malaquias": ("Malaquías", 4),
+    "ml": ("Malaquías", 4), "malachi": ("Malaquías", 4),            # EN
+
+    # ══ NEW TESTAMENT ══════════════════════════════════════════════════════════
+    # Matthew
+    "mt": ("Mateo", 28), "mat": ("Mateo", 28), "mateo": ("Mateo", 28),
+    "matt": ("Mateo", 28), "matthew": ("Mateo", 28),                # EN
+    # Mark
+    "mr": ("Marcos", 16), "mc": ("Marcos", 16), "mar": ("Marcos", 16), "marcos": ("Marcos", 16),
+    "mark": ("Marcos", 16), "mk": ("Marcos", 16), "mrk": ("Marcos", 16),  # EN
+    # Luke
+    "lc": ("Lucas", 24), "luc": ("Lucas", 24), "lucas": ("Lucas", 24),
+    "luke": ("Lucas", 24), "lk": ("Lucas", 24),                     # EN
+    # John
+    "jn": ("Juan", 21), "juan": ("Juan", 21),
+    "john": ("Juan", 21), "jhn": ("Juan", 21),                      # EN
+    # Acts
+    "hch": ("Hechos", 28), "hech": ("Hechos", 28), "hechos": ("Hechos", 28),
+    "acts": ("Hechos", 28), "ac": ("Hechos", 28),                   # EN
+    # Romans
+    "ro": ("Romanos", 16), "rom": ("Romanos", 16), "romanos": ("Romanos", 16),
+    "rm": ("Romanos", 16), "romans": ("Romanos", 16),               # EN
+    # 1 Corinthians
+    "1co": ("1 Corintios", 16), "1cor": ("1 Corintios", 16), "1 cor": ("1 Corintios", 16), "1 corintios": ("1 Corintios", 16),
+    "1 corinthians": ("1 Corintios", 16), "1corinthians": ("1 Corintios", 16),  # EN
+    # 2 Corinthians
+    "2co": ("2 Corintios", 13), "2cor": ("2 Corintios", 13), "2 cor": ("2 Corintios", 13), "2 corintios": ("2 Corintios", 13),
+    "2 corinthians": ("2 Corintios", 13), "2corinthians": ("2 Corintios", 13),  # EN
+    # Galatians
+    "gl": ("Gálatas", 6), "gal": ("Gálatas", 6), "gálatas": ("Gálatas", 6), "galatas": ("Gálatas", 6),
+    "ga": ("Gálatas", 6), "galatians": ("Gálatas", 6),             # EN
+    # Ephesians
+    "ef": ("Efesios", 6), "efe": ("Efesios", 6), "efesios": ("Efesios", 6),
+    "eph": ("Efesios", 6), "ep": ("Efesios", 6), "ephesians": ("Efesios", 6),  # EN
+    # Philippians
+    "fil": ("Filipenses", 4), "flp": ("Filipenses", 4), "filipenses": ("Filipenses", 4),
+    "phil": ("Filipenses", 4), "php": ("Filipenses", 4), "phl": ("Filipenses", 4), "philippians": ("Filipenses", 4),  # EN
+    # Colossians
+    "col": ("Colosenses", 4), "colosenses": ("Colosenses", 4),
+    "colossians": ("Colosenses", 4),                                 # EN
+    # 1 Thessalonians
+    "1ts": ("1 Tesalonicenses", 5), "1tes": ("1 Tesalonicenses", 5), "1 tes": ("1 Tesalonicenses", 5),
+    "1 thess": ("1 Tesalonicenses", 5), "1thess": ("1 Tesalonicenses", 5),      # EN
+    "1th": ("1 Tesalonicenses", 5), "1 th": ("1 Tesalonicenses", 5),            # EN
+    "1 thessalonians": ("1 Tesalonicenses", 5), "1thessalonians": ("1 Tesalonicenses", 5),  # EN
+    # 2 Thessalonians
+    "2ts": ("2 Tesalonicenses", 3), "2tes": ("2 Tesalonicenses", 3), "2 tes": ("2 Tesalonicenses", 3),
+    "2 thess": ("2 Tesalonicenses", 3), "2thess": ("2 Tesalonicenses", 3),      # EN
+    "2th": ("2 Tesalonicenses", 3), "2 th": ("2 Tesalonicenses", 3),            # EN
+    "2 thessalonians": ("2 Tesalonicenses", 3), "2thessalonians": ("2 Tesalonicenses", 3),  # EN
+    # 1 Timothy
+    "1ti": ("1 Timoteo", 6), "1tim": ("1 Timoteo", 6), "1 tim": ("1 Timoteo", 6), "1 timoteo": ("1 Timoteo", 6),
+    "1tm": ("1 Timoteo", 6), "1 timothy": ("1 Timoteo", 6), "1timothy": ("1 Timoteo", 6),  # EN
+    # 2 Timothy
+    "2ti": ("2 Timoteo", 4), "2tim": ("2 Timoteo", 4), "2 tim": ("2 Timoteo", 4), "2 timoteo": ("2 Timoteo", 4),
+    "2tm": ("2 Timoteo", 4), "2 timothy": ("2 Timoteo", 4), "2timothy": ("2 Timoteo", 4),  # EN
+    # Titus
+    "tt": ("Tito", 3), "tit": ("Tito", 3), "tito": ("Tito", 3),
+    "titus": ("Tito", 3),                                            # EN
+    # Philemon
+    "flm": ("Filemón", 1), "fim": ("Filemón", 1), "filemón": ("Filemón", 1),
+    "philem": ("Filemón", 1), "phm": ("Filemón", 1), "phlm": ("Filemón", 1), "philemon": ("Filemón", 1),  # EN
+    # Hebrews
+    "he": ("Hebreos", 13), "heb": ("Hebreos", 13), "hebreos": ("Hebreos", 13),
+    "hebrews": ("Hebreos", 13),                                      # EN
+    # James
+    "stg": ("Santiago", 5), "snt": ("Santiago", 5), "santiago": ("Santiago", 5),
+    "jas": ("Santiago", 5), "jms": ("Santiago", 5), "jm": ("Santiago", 5), "james": ("Santiago", 5),  # EN
+    # 1 Peter
+    "1p": ("1 Pedro", 5), "1pe": ("1 Pedro", 5), "1 pe": ("1 Pedro", 5), "1 pedro": ("1 Pedro", 5),
+    "1 pet": ("1 Pedro", 5), "1pet": ("1 Pedro", 5), "1pt": ("1 Pedro", 5),    # EN
+    "1 peter": ("1 Pedro", 5), "1peter": ("1 Pedro", 5),                        # EN
+    # 2 Peter
+    "2p": ("2 Pedro", 3), "2pe": ("2 Pedro", 3), "2 pe": ("2 Pedro", 3), "2 pedro": ("2 Pedro", 3),
+    "2 pet": ("2 Pedro", 3), "2pet": ("2 Pedro", 3), "2pt": ("2 Pedro", 3),    # EN
+    "2 peter": ("2 Pedro", 3), "2peter": ("2 Pedro", 3),                        # EN
+    # 1 John
+    "1jn": ("1 Juan", 5), "1 jn": ("1 Juan", 5), "1juan": ("1 Juan", 5), "1 juan": ("1 Juan", 5),
+    "1jo": ("1 Juan", 5), "1 jo": ("1 Juan", 5), "1john": ("1 Juan", 5), "1 john": ("1 Juan", 5),  # EN
+    # 2 John
+    "2jn": ("2 Juan", 1), "2 jn": ("2 Juan", 1), "2juan": ("2 Juan", 1), "2 juan": ("2 Juan", 1),
+    "2jo": ("2 Juan", 1), "2 jo": ("2 Juan", 1), "2john": ("2 Juan", 1), "2 john": ("2 Juan", 1),  # EN
+    # 3 John
+    "3jn": ("3 Juan", 1), "3 jn": ("3 Juan", 1), "3juan": ("3 Juan", 1), "3 juan": ("3 Juan", 1),
+    "3jo": ("3 Juan", 1), "3 jo": ("3 Juan", 1), "3john": ("3 Juan", 1), "3 john": ("3 Juan", 1),  # EN
+    # Jude
+    "jud": ("Judas", 1), "judas": ("Judas", 1),
+    "jude": ("Judas", 1), "jd": ("Judas", 1),                       # EN
+    # Revelation / Apocalipsis
+    "ap": ("Apocalipsis", 22), "apo": ("Apocalipsis", 22), "apoc": ("Apocalipsis", 22),
+    "apocalipsis": ("Apocalipsis", 22),
+    "rev": ("Apocalipsis", 22), "rv": ("Apocalipsis", 22),          # EN
+    "revelation": ("Apocalipsis", 22), "apocalypse": ("Apocalipsis", 22),       # EN
+}
+
+# Regex: optional num prefix + book name + chapter:verse (colon or period)
+_REF_PATTERN = re.compile(
+    r'\b([1-3]\s?)?'                          # optional: 1, 2, 3 (with optional space)
+    r'([A-Za-záéíóúüñÁÉÍÓÚÜÑ]+)'             # book name (accented letters included)
+    r'\.?\s+'                                 # optional period, then whitespace
+    r'(\d{1,3})'                              # chapter
+    r'[:.]\s*'                                # separator (colon or period)
+    r'(\d{1,3})'                              # verse
+    r'(?:\s*[-–]\s*\d{1,3})?',               # optional end verse (range)
+    re.IGNORECASE,
+)
+
+
+def _clean_text(html_str: str) -> str:
+    """Strip HTML tags and normalize whitespace for reference parsing."""
+    text = re.sub(r"<[^>]+>", " ", html_str or "")
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&[a-z]+;", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_refs(text: str, source_field: str) -> list[dict]:
+    """Find all Bible references in text and validate them."""
+    results = []
+    seen = set()
+
+    for m in _REF_PATTERN.finditer(text):
+        num_prefix = (m.group(1) or "").replace(" ", "").strip()
+        book_raw   = m.group(2).strip()
+        chapter    = int(m.group(3))
+        verse      = int(m.group(4))
+        ref_text   = m.group(0).strip()
+
+        # Build lookup key: optional num + book (lowercased, no accents stripped)
+        key_parts  = []
+        if num_prefix:
+            key_parts.append(num_prefix)
+        key_parts.append(book_raw.lower())
+        lookup_key = " ".join(key_parts)
+
+        # Also try combined (no space between num and book)
+        lookup_key2 = (num_prefix + book_raw).lower() if num_prefix else None
+
+        book_entry = _BIBLE_BOOKS.get(lookup_key) or (
+            _BIBLE_BOOKS.get(lookup_key2) if lookup_key2 else None
+        )
+
+        # Skip obvious non-references: single-letter "books", numbers-only, etc.
+        if len(book_raw) < 2:
+            continue
+
+        dedup_key = (lookup_key, chapter, verse)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
+        # Build context snippet (±60 chars around match)
+        start = max(0, m.start() - 60)
+        end   = min(len(text), m.end() + 60)
+        context = ("…" if start > 0 else "") + text[start:end] + ("…" if end < len(text) else "")
+        context = re.sub(r"\s+", " ", context).strip()
+
+        if not book_entry:
+            status = "unknown_book"
+            canonical = book_raw
+            max_ch = 0
+        else:
+            canonical, max_ch = book_entry
+            if chapter > max_ch:
+                status = "chapter_out_of_range"
+            elif verse > 200:
+                status = "verse_likely_ok"
+            else:
+                status = "valid"
+
+        results.append({
+            "ref_text":       ref_text,
+            "book_canonical": canonical,
+            "chapter":        chapter,
+            "verse":          verse,
+            "source_field":   source_field,
+            "context":        context,
+            "status":         status,
+        })
+
+    return results
+
+
+@router.get("/{shortname}/versions/{version_id}/bible-refs")
+def get_bible_refs(shortname: str, version_id: int):
+    """Parse all text fields in a course version for Bible citations and validate them."""
+    v = get_version(version_id)
+    if not v or v.get("shortname") != shortname:
+        raise HTTPException(404, "Version not found")
+
+    content = v["content"]
+    all_refs: list[dict] = []
+
+    # Scan module contents
+    for mc in content.get("module_contents", []):
+        num = mc.get("module_num", "?")
+        if lecture := mc.get("lecture_html", ""):
+            all_refs.extend(_extract_refs(_clean_text(lecture), f"module_{num}.lecture"))
+        if forum_q := (mc.get("forum_question") or mc.get("discussion_question") or ""):
+            all_refs.extend(_extract_refs(forum_q, f"module_{num}.forum_question"))
+        for entry in mc.get("glossary", []):
+            if defn := entry.get("definition", ""):
+                all_refs.extend(_extract_refs(defn, f"module_{num}.glossary"))
+
+    # Scan syllabus
+    syllabus = content.get("syllabus", {})
+    for key in ("intro_html", "content_html"):
+        if val := syllabus.get(key, ""):
+            all_refs.extend(_extract_refs(_clean_text(val), f"syllabus.{key}"))
+
+    # Scan course summary
+    summary = content.get("course_structure", {}).get("course_summary", "")
+    if summary:
+        all_refs.extend(_extract_refs(_clean_text(summary), "course_summary"))
+
+    return all_refs
+
+
+# ── Print / export ────────────────────────────────────────────────────────────
+
+@router.get("/{shortname}/versions/{version_id}/export-html", response_class=None)
+def export_html(shortname: str, version_id: int):
+    """Return a print-friendly HTML page for the course version."""
+    from fastapi.responses import HTMLResponse
+    import html as _html
+
+    v = get_version(version_id)
+    if not v or v.get("shortname") != shortname:
+        raise HTTPException(404, "Version not found")
+
+    course   = get_course(shortname) or {}
+    content  = v["content"]
+    modules  = content.get("course_structure", {}).get("modules", [])
+    mcs      = content.get("module_contents", [])
+    quiz     = content.get("quiz_questions", [])
+    syllabus = content.get("syllabus") or {}
+
+    mc_by_num = {m.get("module_num"): m for m in mcs}
+
+    e = _html.escape
+
+    def mc_for(num):
+        return mc_by_num.get(num) or next(
+            (m for i, m in enumerate(mcs) if i == num - 1), {}
+        )
+
+    sections_html = ""
+    for mod in modules:
+        mc  = mc_for(mod.get("number", 0))
+        lec = mc.get("lecture_html") or ""
+        fq  = mc.get("forum_question") or mc.get("discussion_question") or ""
+        glossary = mc.get("glossary") or []
+        topics = ", ".join(mod.get("key_topics") or [])
+        sections_html += f"""
+        <section class="module">
+          <h2>Module {mod.get('number')}: {e(mod.get('title',''))}</h2>
+          <p class="objective"><em>Objective:</em> {e(mod.get('objective',''))}</p>
+          {f'<p class="topics"><em>Topics:</em> {e(topics)}</p>' if topics else ''}
+          {lec}
+          {f'<div class="forum-q"><strong>Discussion Question</strong><p>{e(fq)}</p></div>' if fq else ''}
+          {('<div class="glossary"><strong>Glossary (' + str(len(glossary)) + ' terms)</strong><ul>'
+            + ''.join(f'<li><strong>{e(g.get("term",""))}</strong>' + (f' — {e(g.get("definition",""))}' if g.get("definition") else '') + '</li>' for g in glossary)
+            + '</ul></div>') if glossary else ''}
+        </section>"""
+
+    quiz_html = ""
+    if quiz:
+        items = ""
+        for i, q in enumerate(quiz, 1):
+            opts = q.get("options", [])
+            ci   = int(q.get("correct_index", 0))
+            opts_html = "".join(
+                f'<li class="{"correct" if j==ci else ""}">{e(str(opt))}</li>'
+                for j, opt in enumerate(opts)
+            )
+            items += f'<div class="question"><p><strong>{i}.</strong> {e(str(q.get("question","")))}</p><ul>{opts_html}</ul></div>'
+        quiz_html = f'<section class="quiz"><h2>Quiz Bank ({len(quiz)} questions)</h2>{items}</section>'
+
+    syl_html = ""
+    if isinstance(syllabus, dict):
+        intro   = syllabus.get("intro_html") or ""
+        content_s = syllabus.get("content_html") or ""
+        if intro or content_s:
+            syl_html = f'<section class="syllabus"><h2>Syllabus</h2>{intro}{content_s}</section>'
+
+    page = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{e(course.get('fullname', shortname))}</title>
+<style>
+  body {{ font-family: Georgia, serif; max-width: 860px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.7; font-size: 15px; }}
+  h1   {{ font-size: 1.8em; border-bottom: 2px solid #333; padding-bottom: 8px; margin-bottom: 4px; }}
+  h2   {{ font-size: 1.3em; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 2em; color: #333; }}
+  h3   {{ font-size: 1.1em; color: #444; }}
+  .meta {{ color: #555; font-size: 0.9em; margin-bottom: 2em; }}
+  .module {{ margin-bottom: 2.5em; page-break-inside: avoid; }}
+  .objective, .topics {{ color: #444; font-size: 0.9em; }}
+  .forum-q {{ background: #f0f7ff; border-left: 3px solid #3b82f6; padding: 8px 14px; margin: 1em 0; }}
+  .glossary {{ font-size: 0.88em; color: #444; }}
+  .glossary ul {{ padding-left: 1.2em; }}
+  .question {{ margin-bottom: 1.4em; page-break-inside: avoid; }}
+  .question ul {{ list-style: none; padding-left: 1.2em; margin-top: 4px; }}
+  .question li {{ padding: 2px 0; color: #444; }}
+  .question li.correct {{ font-weight: bold; color: #166534; }}
+  .syllabus {{ margin-top: 2em; }}
+  @media print {{
+    body {{ margin: 0; font-size: 12pt; }}
+    h1 {{ font-size: 18pt; }}
+    h2 {{ font-size: 14pt; }}
+    .module, .question {{ page-break-inside: avoid; }}
+    a {{ color: inherit; text-decoration: none; }}
+  }}
+</style>
+</head>
+<body>
+<h1>{e(course.get('fullname', shortname))}</h1>
+<div class="meta">
+  <strong>Code:</strong> {e(shortname)} &nbsp;|&nbsp;
+  <strong>Professor:</strong> {e(course.get('professor',''))} &nbsp;|&nbsp;
+  <strong>Category:</strong> {e(course.get('category',''))} &nbsp;|&nbsp;
+  <strong>Version:</strong> v{v.get('version_num','')}
+  {f" &nbsp;|&nbsp; <strong>Dates:</strong> {e(v.get('start_date',''))} → {e(v.get('end_date',''))}" if v.get('start_date') else ''}
+</div>
+{syl_html}
+{sections_html}
+{quiz_html}
+<script>window.onload = function(){{ window.print(); }}</script>
+</body>
+</html>"""
+
+    return HTMLResponse(content=page)
+
+
+# ── Curriculum mapper ─────────────────────────────────────────────────────────
+
+_THEOLOGICAL_DOMAINS: dict[str, list[str]] = {
+    "Old Testament": [
+        "old testament", "antiguo testamento", "genesis", "génesis", "exodus",
+        "leviticus", "numbers", "deuteronomy", "joshua", "judges", "samuel",
+        "kings", "reyes", "chronicles", "ezra", "nehemiah", "psalms", "salmos",
+        "proverbs", "proverbios", "isaiah", "isaías", "jeremiah", "jeremías",
+        "ezekiel", "ezequiel", "daniel", "pentateuco", "profetas", "sabiduría",
+    ],
+    "New Testament": [
+        "new testament", "nuevo testamento", "matthew", "mateo", "mark",
+        "marcos", "luke", "lucas", "john", "juan", "acts", "hechos", "romans",
+        "romanos", "corinthians", "corintios", "galatians", "gálatas",
+        "ephesians", "efesios", "philippians", "filipenses", "revelation",
+        "apocalipsis", "evangelios", "epístolas", "epistles",
+    ],
+    "Systematic Theology": [
+        "theology", "teología", "doctrine", "doctrina", "systematic",
+        "sistemática", "hermeneutics", "hermenéutica", "pneumatology",
+        "pneumatología", "soteriology", "soteriología", "eschatology",
+        "escatología", "christology", "cristología", "ecclesiology",
+        "eclesiología", "trinity", "trinidad", "apologetics", "apologética",
+    ],
+    "Church History": [
+        "church history", "historia de la iglesia", "reformation", "reforma",
+        "patristics", "patrística", "council", "concilio", "apostolic",
+        "apostólico", "medieval", "reformadores", "ancient church", "early church",
+    ],
+    "Pastoral Ministry": [
+        "pastoral", "ministry", "ministerio", "preaching", "predicación",
+        "homiletics", "homilética", "counseling", "consejería", "leadership",
+        "liderazgo", "discipleship", "discipulado", "worship", "adoración",
+        "church planting", "plantación de iglesias",
+    ],
+    "Biblical Languages": [
+        "greek", "griego", "hebrew", "hebreo", "aramaic", "arameo",
+        "linguistics", "lingüística", "lexicon", "léxico", "syntax", "sintaxis",
+        "biblical language", "idioma bíblico",
+    ],
+    "Ethics": [
+        "ethics", "ética", "moral", "morality", "moralidad", "justice",
+        "justicia", "bioethics", "bioética", "social", "virtues", "virtudes",
+        "values", "valores",
+    ],
+    "Missions & Evangelism": [
+        "missions", "misiones", "evangelism", "evangelismo", "missiology",
+        "misiología", "cross-cultural", "intercultural", "church growth",
+        "crecimiento de la iglesia",
+    ],
+}
+
+
+@router.get("/curriculum")
+def get_curriculum():
+    """Map all library courses to theological domains based on keyword analysis."""
+    courses = list_courses()
+    domain_names = list(_THEOLOGICAL_DOMAINS.keys())
+
+    course_data = []
+    for course in courses:
+        versions = list_versions(course["shortname"])
+        domains: dict[str, int] = {}
+        module_count = 0
+
+        if versions:
+            v = get_version(versions[0]["id"])
+            if v:
+                content = v.get("content", {})
+                modules = content.get("course_structure", {}).get("modules", [])
+                mcs     = content.get("module_contents", [])
+                module_count = len(modules)
+
+                parts = [
+                    course["fullname"].lower(),
+                    course.get("category", "").lower(),
+                    course.get("prompt", "").lower(),
+                ]
+                for mod in modules:
+                    parts.append(mod.get("title", "").lower())
+                    parts.extend(k.lower() for k in mod.get("key_topics", []))
+                    parts.append(mod.get("objective", "").lower())
+                for mc in mcs:
+                    parts.append(mc.get("forum_question", "").lower())
+
+                all_text = " ".join(parts)
+                for domain, keywords in _THEOLOGICAL_DOMAINS.items():
+                    score = sum(1 for kw in keywords if kw in all_text)
+                    if score > 0:
+                        domains[domain] = score
+
+        course_data.append({
+            "shortname":    course["shortname"],
+            "fullname":     course["fullname"],
+            "category":     course.get("category", ""),
+            "instance":     course.get("instance", ""),
+            "module_count": module_count,
+            "domains":      domains,
+        })
+
+    return {"courses": course_data, "domains": domain_names}
+
+
+# ── Review schedules ──────────────────────────────────────────────────────────
+
+class ScheduleIn(BaseModel):
+    shortname:     str
+    version_id:    int | None = None
+    agent_id:      str
+    agent_label:   str
+    agent_color:   str = "gray"
+    agent_context: str
+    model_id:      str
+    frequency:     str = "weekly"
+
+
+@router.get("/schedules")
+def list_review_schedules():
+    return list_schedules()
+
+
+@router.post("/schedules/run-overdue")
+def run_overdue_reviews():
+    """Run all overdue scheduled reviews synchronously and return a summary."""
+    from datetime import timedelta
+
+    overdue   = get_overdue_schedules()
+    settings  = get_settings()
+    triggered = 0
+    errors: list[str] = []
+
+    for sched in overdue:
+        shortname = sched["shortname"]
+        try:
+            vers = list_versions(shortname)
+            if not vers:
+                errors.append(f"{shortname}: no versions")
+                continue
+
+            vid = sched.get("version_id")
+            ver = get_version(int(vid)) if vid else get_version(vers[0]["id"])
+            if not ver:
+                errors.append(f"{shortname}: version not found")
+                continue
+
+            course_text = _format_for_review(shortname, ver)
+            system_msg  = sched["agent_context"] + _JSON_OUTPUT_INSTRUCTION
+            messages    = [
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": f"Audit this course:\n\n{course_text}"},
+            ]
+
+            raw = cc.call_llm(
+                messages,
+                settings.get("llm_url", ""),
+                model_id=sched.get("model_id") or "local-model",
+                temperature=0.2,
+                max_tokens=2048,
+                api_key=settings.get("llm_api_key", ""),
+            )
+
+            result = None
+            for candidate in [raw, _extract_json_block(raw)]:
+                if not candidate:
+                    continue
+                try:
+                    result = json.loads(candidate)
+                    break
+                except Exception:
+                    pass
+
+            if result is None:
+                errors.append(f"{shortname}: LLM returned non-JSON")
+                continue
+
+            response = {"shortname": shortname, "version_num": ver.get("version_num"), **result}
+            save_review(shortname, ver.get("id"), ver.get("version_num"),
+                        sched["agent_id"], sched["agent_label"], sched["agent_color"], response)
+
+            freq_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(
+                sched.get("frequency", "weekly"), 7)
+            now_str  = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            next_run = (datetime.utcnow() + timedelta(days=freq_days)).strftime("%Y-%m-%d %H:%M:%S")
+            update_schedule_run(sched["id"], now_str, next_run)
+            triggered += 1
+
+        except Exception as e:
+            errors.append(f"{shortname}: {e}")
+
+    return {"triggered": triggered, "errors": errors}
+
+
+@router.post("/schedules")
+def create_review_schedule(body: ScheduleIn):
+    from datetime import timedelta
+
+    freq_days = {"daily": 1, "weekly": 7, "monthly": 30}.get(body.frequency, 7)
+    next_run  = (datetime.utcnow() + timedelta(days=freq_days)).strftime("%Y-%m-%d %H:%M:%S")
+    return save_schedule(
+        shortname=body.shortname,
+        agent_id=body.agent_id,
+        agent_label=body.agent_label,
+        agent_color=body.agent_color,
+        agent_context=body.agent_context,
+        model_id=body.model_id,
+        frequency=body.frequency,
+        next_run_at=next_run,
+        version_id=body.version_id,
+    )
+
+
+@router.delete("/schedules/{schedule_id}")
+def delete_review_schedule(schedule_id: int):
+    if not delete_schedule(schedule_id):
+        raise HTTPException(404, "Schedule not found")
+    return {"deleted": schedule_id}
 
 
 # ── Courses ───────────────────────────────────────────────────────────────────

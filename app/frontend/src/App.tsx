@@ -1,15 +1,16 @@
 import { useState, useCallback } from 'react'
 import { AppShell, Tabs, Title, Group, Text, Loader, Badge, Box } from '@mantine/core'
 import {
-  IconBooks, IconWand, IconCloud, IconSettings, IconShieldCheck,
+  IconBooks, IconWand, IconCloud, IconSettings, IconShieldCheck, IconMap2,
 } from '@tabler/icons-react'
 import LibraryPage          from './pages/Library'
 import NewCoursePage        from './pages/NewCourse'
 import MoodlePage           from './pages/MoodleCourses'
 import SettingsPage         from './pages/Settings'
 import AutonomousReviewPage from './pages/AutonomousReview'
+import CurriculumPage       from './pages/Curriculum'
 
-type Tab = 'library' | 'new' | 'moodle' | 'review' | 'settings'
+type Tab = 'library' | 'new' | 'moodle' | 'curriculum' | 'review' | 'settings'
 
 export default function App() {
   const [tab, setTab]                 = useState<Tab>('library')
@@ -31,7 +32,7 @@ export default function App() {
           <IconBooks size={24} color="#1c7ed6" />
           <div>
             <Title order={5} style={{ lineHeight: 1 }}>Moodle Course Administrator</Title>
-            <Text size="xs" c="dimmed" style={{ lineHeight: 1 }}>Colegio Teológico Biblos</Text>
+            <Text size="xs" c="dimmed" style={{ lineHeight: 1 }}>Course Authoring Studio</Text>
           </div>
         </Group>
       </AppShell.Header>
@@ -52,10 +53,13 @@ export default function App() {
                 )}
               </Group>
             </Tabs.Tab>
-            <Tabs.Tab value="moodle"   leftSection={<IconCloud size={16} />}>
+            <Tabs.Tab value="moodle"     leftSection={<IconCloud size={16} />}>
               Instance Course Catalog
             </Tabs.Tab>
-            <Tabs.Tab value="review" leftSection={<IconShieldCheck size={16} />}>
+            <Tabs.Tab value="curriculum" leftSection={<IconMap2 size={16} />}>
+              Curriculum Map
+            </Tabs.Tab>
+            <Tabs.Tab value="review"     leftSection={<IconShieldCheck size={16} />}>
               Autonomous Review
             </Tabs.Tab>
             <Tabs.Tab value="settings" leftSection={<IconSettings size={16} />}>
@@ -74,9 +78,10 @@ export default function App() {
           />
         </Box>
 
-        {tab === 'moodle'   && <MoodlePage />}
-        {tab === 'review'   && <AutonomousReviewPage />}
-        {tab === 'settings' && <SettingsPage />}
+        {tab === 'moodle'      && <MoodlePage />}
+        {tab === 'curriculum'  && <CurriculumPage />}
+        {tab === 'review'      && <AutonomousReviewPage />}
+        {tab === 'settings'    && <SettingsPage />}
       </AppShell.Main>
     </AppShell>
   )

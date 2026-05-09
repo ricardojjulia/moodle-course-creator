@@ -3,17 +3,17 @@ import {
   Stack, Title, Text, Button, Group, Paper, Switch,
   Textarea, Badge, Loader, ScrollArea,
   SimpleGrid, ThemeIcon, Autocomplete, Select,
-  Collapse, Box, MultiSelect, Divider,
+  Collapse, Box, MultiSelect, Divider, ActionIcon, Table,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
   IconShieldCheck, IconChevronDown, IconChevronRight,
   IconSparkles, IconSchool, IconWand,
-  IconCheck, IconX, IconCircle,
+  IconCheck, IconX, IconCircle, IconTrash, IconHistory,
 } from '@tabler/icons-react'
 import {
   api, type Course, type CourseReviewResult, type CourseVersion,
-  type LlmModel,
+  type LlmModel, type PersistedReview,
 } from '../api/client'
 
 // ── Agent defaults ────────────────────────────────────────────────────────────
@@ -369,21 +369,29 @@ const INITIAL_AGENTS: AgentConfig[] = [
 ]
 
 export default function AutonomousReviewPage() {
-  const [courses,     setCourses]     = useState<Course[]>([])
-  const [agents,      setAgents]      = useState<AgentConfig[]>(INITIAL_AGENTS)
-  const [filterCat,   setFilterCat]   = useState<string | null>(null)
-  const [selectedSns, setSelectedSns] = useState<string[]>([])
-  const [modelId,     setModelId]     = useState('')
-  const [modelOptions,setModelOptions]= useState<string[]>([])
-  const [running,      setRunning]      = useState(false)
-  const [results,      setResults]      = useState<ReviewRun[]>([])
-  const [configOpen,   setConfigOpen]   = useState(true)
-  const [reviewSteps,  setReviewSteps]  = useState<ProgressStep[]>([])
-  const [regenerating, setRegenerating] = useState<Record<string, boolean>>({})
-  const [regenSteps,   setRegenSteps]   = useState<Record<string, ProgressStep[]>>({})
-  const [regenDone,    setRegenDone]    = useState<Record<string, CourseVersion>>({})
+  const [courses,          setCourses]          = useState<Course[]>([])
+  const [agents,           setAgents]           = useState<AgentConfig[]>(INITIAL_AGENTS)
+  const [filterCat,        setFilterCat]        = useState<string | null>(null)
+  const [selectedSns,      setSelectedSns]      = useState<string[]>([])
+  const [versionMap,       setVersionMap]       = useState<Record<string, CourseVersion[]>>({})
+  const [selectedVersions, setSelectedVersions] = useState<Record<string, number>>({})
+  const [modelId,          setModelId]          = useState('')
+  const [modelOptions,     setModelOptions]     = useState<string[]>([])
+  const [running,          setRunning]          = useState(false)
+  const [results,          setResults]          = useState<ReviewRun[]>([])
+  const [configOpen,       setConfigOpen]       = useState(true)
+  const [reviewSteps,      setReviewSteps]      = useState<ProgressStep[]>([])
+  const [regenerating,     setRegenerating]     = useState<Record<string, boolean>>({})
+  const [regenSteps,       setRegenSteps]       = useState<Record<string, ProgressStep[]>>({})
+  const [regenDone,        setRegenDone]        = useState<Record<string, CourseVersion>>({})
+  const [history,          setHistory]          = useState<PersistedReview[]>([])
+  const [historyOpen,      setHistoryOpen]      = useState(false)
+
+  const loadHistory = () =>
+    api.reviews.recent().then(setHistory).catch(() => {})
 
   useEffect(() => {
+    loadHistory()
     api.courses.list().then(cs => {
       setCourses(cs)
       setSelectedSns(cs.map(c => c.shortname))
@@ -401,6 +409,21 @@ export default function AutonomousReviewPage() {
       }).catch(() => {})
     })
   }, [])
+
+  // Load versions for newly-selected courses
+  useEffect(() => {
+    const unloaded = selectedSns.filter(sn => !(sn in versionMap))
+    if (!unloaded.length) return
+    for (const sn of unloaded) {
+      setVersionMap(prev => ({ ...prev, [sn]: [] })) // mark as loading
+      api.courses.versions(sn).then(vers => {
+        setVersionMap(prev => ({ ...prev, [sn]: vers }))
+        if (vers.length) {
+          setSelectedVersions(prev => ({ ...prev, [sn]: vers[0].id }))
+        }
+      }).catch(() => {})
+    }
+  }, [selectedSns])
 
   const patchAgent = (id: string, patch: Partial<AgentConfig>) =>
     setAgents(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a))
@@ -546,6 +569,10 @@ export default function AutonomousReviewPage() {
           const result = await api.courses.review(course.shortname, {
             agent_context: agent.prompt,
             model_id:      modelId,
+            version_id:    selectedVersions[course.shortname],
+            agent_id:      agent.id,
+            agent_label:   agent.label,
+            agent_color:   agent.color,
           })
           setResults(prev => [...prev, { ...result, agent_label: agent.label, agent_color: agent.color }])
           updateReviewStep(stepId, 'done')
@@ -569,6 +596,7 @@ export default function AutonomousReviewPage() {
     }
 
     setRunning(false)
+    loadHistory()
     notifications.show({
       title:   'Review complete',
       message: `${completed} run${completed !== 1 ? 's' : ''} across ${toReview.length} course${toReview.length !== 1 ? 's' : ''}`,
@@ -659,6 +687,48 @@ export default function AutonomousReviewPage() {
                 <Button size="xs" variant="subtle" color="gray" onClick={() => setSelectedSns([])}>None</Button>
                 <Text size="xs" c="dimmed">{selectedSns.length} of {filteredCourses.length} selected{filterCat ? ` in "${filterCat}"` : ''}</Text>
               </Group>
+
+              {selectedSns.length > 0 && (
+                <Box mt="sm">
+                  <Text size="xs" fw={500} c="dimmed" mb={6}>Version to review per course</Text>
+                  <ScrollArea mah={180} offsetScrollbars>
+                    <Stack gap={4}>
+                      {selectedSns.map(sn => {
+                        const vers = versionMap[sn] ?? []
+                        const versionOptions = vers.map((v, i) => ({
+                          value: String(v.id),
+                          label: `v${v.version_num}${i === 0 ? ' (latest)' : ''}`,
+                        }))
+                        return (
+                          <Group key={sn} gap="xs" wrap="nowrap">
+                            <Text
+                              size="xs"
+                              style={{
+                                width: 130,
+                                flexShrink: 0,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {sn}
+                            </Text>
+                            <Select
+                              size="xs"
+                              style={{ flex: 1 }}
+                              data={versionOptions}
+                              value={selectedVersions[sn] != null ? String(selectedVersions[sn]) : null}
+                              onChange={v => v && setSelectedVersions(prev => ({ ...prev, [sn]: Number(v) }))}
+                              placeholder={vers.length === 0 ? 'Loading…' : undefined}
+                              disabled={vers.length === 0}
+                            />
+                          </Group>
+                        )
+                      })}
+                    </Stack>
+                  </ScrollArea>
+                </Box>
+              )}
             </Paper>
 
             <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-orange-5)' }}>
@@ -789,6 +859,87 @@ export default function AutonomousReviewPage() {
               )
             })}
           </Stack>
+        </>
+      )}
+
+      {/* Review History */}
+      {history.length > 0 && (
+        <>
+          <Divider />
+          <Box>
+            <Group
+              gap="xs"
+              mb="sm"
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => setHistoryOpen(o => !o)}
+            >
+              <ThemeIcon size="sm" color="gray" variant="light">
+                <IconHistory size={14} />
+              </ThemeIcon>
+              <Text size="sm" fw={600} c="dimmed">Review History</Text>
+              <Badge size="xs" variant="outline" color="gray">{history.length}</Badge>
+              {historyOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+            </Group>
+
+            <Collapse in={historyOpen}>
+              <ScrollArea>
+                <Table withTableBorder withColumnBorders fz="xs">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Course</Table.Th>
+                      <Table.Th>Agent</Table.Th>
+                      <Table.Th>Version</Table.Th>
+                      <Table.Th>Verdict</Table.Th>
+                      <Table.Th>Score</Table.Th>
+                      <Table.Th>Date</Table.Th>
+                      <Table.Th w={32} />
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {history.map(r => (
+                      <Table.Tr key={r.id}>
+                        <Table.Td fw={600}>{r.shortname}</Table.Td>
+                        <Table.Td>
+                          <Badge size="xs" color={r.agent_color || 'gray'} variant="dot">
+                            {r.agent_label || r.agent_id || '—'}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td c="dimmed">{r.version_num != null ? `v${r.version_num}` : '—'}</Table.Td>
+                        <Table.Td>
+                          {r.error
+                            ? <Badge size="xs" color="red">Error</Badge>
+                            : <Badge size="xs" color={overallColor(r.overall ?? '')} variant="light">
+                                {r.overall ?? '—'}
+                              </Badge>
+                          }
+                        </Table.Td>
+                        <Table.Td c={r.score != null ? scoreColor(r.score) : 'dimmed'}>
+                          {r.score != null ? `${r.score}/100` : '—'}
+                        </Table.Td>
+                        <Table.Td c="dimmed">
+                          {new Date(r.run_at).toLocaleDateString(undefined, {
+                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                          })}
+                        </Table.Td>
+                        <Table.Td>
+                          <ActionIcon
+                            size="xs" variant="subtle" color="red"
+                            onClick={async () => {
+                              const course = courses.find(c => c.shortname === r.shortname)
+                              await api.courses.deleteReview(r.shortname, r.id).catch(() => {})
+                              setHistory(prev => prev.filter(h => h.id !== r.id))
+                            }}
+                          >
+                            <IconTrash size={12} />
+                          </ActionIcon>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            </Collapse>
+          </Box>
         </>
       )}
 

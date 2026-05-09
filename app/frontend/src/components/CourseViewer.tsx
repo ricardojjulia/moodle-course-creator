@@ -2,15 +2,15 @@
  * Shared read-only (and optionally editable) course content viewer.
  * Used by Library (read-only) and Course Studio Review (editable).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Accordion, Badge, Box, Button, Checkbox, Group, Loader,
   Modal, ScrollArea, Stack, Table, Text, ActionIcon,
-  TypographyStylesProvider, Divider, Textarea, Select,
+  TypographyStylesProvider, Divider, Textarea, Select, TextInput, NumberInput, Paper,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { IconExternalLink, IconRefresh } from '@tabler/icons-react'
-import { api, type LlmModel } from '../api/client'
+import { IconExternalLink, IconRefresh, IconPencil, IconCheck, IconX, IconTrash, IconPlus, IconDeviceFloppy, IconSearch, IconArrowUp, IconArrowDown, IconUpload, IconDownload } from '@tabler/icons-react'
+import { api, type LlmModel, type QuizQuestion, type BibleRef } from '../api/client'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -103,13 +103,293 @@ function ActivityModal({ activity, moodleCourseId, onClose }: {
   )
 }
 
+// ── Quiz editor ───────────────────────────────────────────────────────────────
+
+const EMPTY_QUESTION = (): QuizQuestion => ({
+  question: '', options: ['', '', '', ''], correct_index: 0, explanation: '',
+})
+
+function QuizEditor({
+  questions: initial, onSave, onCancel,
+}: {
+  questions: QuizQuestion[]
+  onSave: (qs: QuizQuestion[]) => Promise<void>
+  onCancel: () => void
+}) {
+  const [qs,     setQs]     = useState<QuizQuestion[]>(() =>
+    initial.map(q => ({ ...q, options: [...(q.options ?? ['','','',''])] }))
+  )
+  const [saving, setSaving] = useState(false)
+  const importRef = useRef<HTMLInputElement>(null)
+
+  const update = (i: number, patch: Partial<QuizQuestion>) =>
+    setQs(prev => prev.map((q, idx) => idx === i ? { ...q, ...patch } : q))
+
+  const updateOption = (qi: number, oi: number, val: string) =>
+    setQs(prev => prev.map((q, idx) => {
+      if (idx !== qi) return q
+      const opts = [...q.options]
+      opts[oi] = val
+      return { ...q, options: opts }
+    }))
+
+  const moveUp   = (i: number) => setQs(prev => {
+    if (i === 0) return prev
+    const next = [...prev]; [next[i - 1], next[i]] = [next[i], next[i - 1]]; return next
+  })
+  const moveDown = (i: number) => setQs(prev => {
+    if (i === prev.length - 1) return prev
+    const next = [...prev]; [next[i], next[i + 1]] = [next[i + 1], next[i]]; return next
+  })
+
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(qs, null, 2)], { type: 'application/json' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = 'quiz_questions.json'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string)
+        const items: QuizQuestion[] = Array.isArray(parsed) ? parsed : []
+        const valid = items.filter(q =>
+          typeof q.question === 'string' &&
+          Array.isArray(q.options) && q.options.length >= 2 &&
+          typeof q.correct_index === 'number'
+        )
+        setQs(prev => [...prev, ...valid.map(q => ({ ...q, options: [...q.options] }))])
+      } catch {
+        // silently ignore malformed JSON
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try { await onSave(qs) } finally { setSaving(false) }
+  }
+
+  return (
+    <Stack gap="sm">
+      <input ref={importRef} type="file" accept=".json" title="Import quiz questions JSON" aria-label="Import quiz questions JSON" hidden onChange={handleImport} />
+      <Group justify="space-between" wrap="wrap">
+        <Text size="sm" fw={600}>{qs.length} questions</Text>
+        <Group gap="xs">
+          <Button size="xs" variant="subtle" leftSection={<IconUpload size={12} />}
+                  onClick={() => importRef.current?.click()}>
+            Import
+          </Button>
+          <Button size="xs" variant="subtle" leftSection={<IconDownload size={12} />}
+                  onClick={handleExport} disabled={qs.length === 0}>
+            Export
+          </Button>
+          <Button size="xs" variant="subtle" onClick={onCancel}>Cancel</Button>
+          <Button size="xs" color="green" leftSection={<IconDeviceFloppy size={13} />}
+                  loading={saving} onClick={handleSave}>
+            Save Quiz
+          </Button>
+        </Group>
+      </Group>
+
+      <ScrollArea mah={520} offsetScrollbars>
+        <Stack gap="md">
+          {qs.map((q, qi) => (
+            <Paper key={qi} withBorder p="sm" radius="sm"
+                   style={{ borderLeft: '3px solid var(--mantine-color-orange-4)' }}>
+              <Group justify="space-between" mb="xs">
+                <Group gap={2}>
+                  <Badge size="xs" color="orange" variant="light">Q{qi + 1}</Badge>
+                  <ActionIcon size="xs" variant="subtle" color="gray"
+                              disabled={qi === 0} onClick={() => moveUp(qi)}>
+                    <IconArrowUp size={11} />
+                  </ActionIcon>
+                  <ActionIcon size="xs" variant="subtle" color="gray"
+                              disabled={qi === qs.length - 1} onClick={() => moveDown(qi)}>
+                    <IconArrowDown size={11} />
+                  </ActionIcon>
+                </Group>
+                <ActionIcon size="xs" color="red" variant="subtle"
+                            onClick={() => setQs(prev => prev.filter((_, i) => i !== qi))}>
+                  <IconTrash size={12} />
+                </ActionIcon>
+              </Group>
+
+              <Textarea
+                size="xs" label="Question" minRows={2} autosize mb="xs"
+                value={q.question}
+                onChange={e => update(qi, { question: e.currentTarget.value })}
+              />
+
+              <Stack gap={4} mb="xs">
+                {q.options.map((opt, oi) => (
+                  <Group key={oi} gap="xs" wrap="nowrap">
+                    <Text size="xs" fw={600} w={16} style={{ flexShrink: 0, color: oi === q.correct_index ? 'var(--mantine-color-green-6)' : undefined }}>
+                      {String.fromCharCode(65 + oi)}
+                    </Text>
+                    <TextInput
+                      size="xs"
+                      style={{ flex: 1 }}
+                      value={opt}
+                      onChange={e => updateOption(qi, oi, e.currentTarget.value)}
+                      styles={oi === q.correct_index
+                        ? { input: { borderColor: 'var(--mantine-color-green-5)', background: 'rgba(74,222,128,0.07)' } }
+                        : undefined
+                      }
+                    />
+                    <ActionIcon
+                      size="xs"
+                      variant={oi === q.correct_index ? 'filled' : 'subtle'}
+                      color="green"
+                      onClick={() => update(qi, { correct_index: oi })}
+                    >
+                      <IconCheck size={11} />
+                    </ActionIcon>
+                  </Group>
+                ))}
+              </Stack>
+
+              <TextInput
+                size="xs" label="Explanation (optional)"
+                value={q.explanation ?? ''}
+                onChange={e => update(qi, { explanation: e.currentTarget.value })}
+              />
+            </Paper>
+          ))}
+
+          <Button
+            variant="dashed" color="orange" size="xs" fullWidth
+            leftSection={<IconPlus size={13} />}
+            onClick={() => setQs(prev => [...prev, EMPTY_QUESTION()])}
+          >
+            Add Question
+          </Button>
+        </Stack>
+      </ScrollArea>
+    </Stack>
+  )
+}
+
+// ── Bible Reference Validator panel ──────────────────────────────────────────
+
+const STATUS_COLOR: Record<BibleRef['status'], string> = {
+  valid:                'green',
+  verse_likely_ok:      'yellow',
+  unknown_book:         'red',
+  chapter_out_of_range: 'red',
+}
+
+const STATUS_LABEL: Record<BibleRef['status'], string> = {
+  valid:                'Valid',
+  verse_likely_ok:      'OK',
+  unknown_book:         'Unknown book',
+  chapter_out_of_range: 'Ch. out of range',
+}
+
+function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId: number }) {
+  const [refs,    setRefs]    = useState<BibleRef[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const scan = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await api.courses.bibleRefs(shortname, versionId)
+      setRefs(data)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const valid   = refs?.filter(r => r.status === 'valid' || r.status === 'verse_likely_ok').length ?? 0
+  const flagged = refs?.filter(r => r.status !== 'valid' && r.status !== 'verse_likely_ok').length ?? 0
+
+  return (
+    <Stack gap="sm">
+      <Group justify="space-between">
+        {refs === null ? (
+          <Text size="xs" c="dimmed">Scan course text for Bible citations.</Text>
+        ) : (
+          <Group gap="xs">
+            <Badge size="xs" color="gray"   variant="light">{refs.length} references</Badge>
+            <Badge size="xs" color="green"  variant="light">{valid} valid</Badge>
+            {flagged > 0 && <Badge size="xs" color="red" variant="light">{flagged} flagged</Badge>}
+          </Group>
+        )}
+        <Button
+          size="xs" variant="light" color="indigo"
+          leftSection={loading ? <Loader size={12} /> : <IconSearch size={13} />}
+          onClick={scan}
+          loading={loading}
+        >
+          {refs === null ? 'Scan' : 'Re-scan'}
+        </Button>
+      </Group>
+
+      {error && <Text size="xs" c="red">{error}</Text>}
+
+      {refs && refs.length === 0 && (
+        <Text size="xs" c="dimmed" ta="center" py="xs">No Bible references found in this version.</Text>
+      )}
+
+      {refs && refs.length > 0 && (
+        <ScrollArea mah={340} offsetScrollbars>
+          <Table withTableBorder={false} withRowBorders highlightOnHover fz="xs">
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Reference</Table.Th>
+                <Table.Th>Book</Table.Th>
+                <Table.Th>Source</Table.Th>
+                <Table.Th>Status</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {refs.map((r, i) => (
+                <Table.Tr key={i}>
+                  <Table.Td>
+                    <Text size="xs" fw={600}>{r.ref_text}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed">{r.book_canonical}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
+                      {r.source_field}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge size="xs" color={STATUS_COLOR[r.status]} variant="light">
+                      {STATUS_LABEL[r.status]}
+                    </Badge>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
+      )}
+    </Stack>
+  )
+}
+
 // ── Module panel ──────────────────────────────────────────────────────────────
 
-function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
+function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
   mod: ModuleItem
   mc?: ModuleContent
   moodleCourseId?: number
   editProps?: EditProps & { moduleNum: number }
+  onFieldEdit?: (moduleNum: number, field: string, value: string) => Promise<void>
 }) {
   const [activeActivity,  setActiveActivity]  = useState<ActivitySnap | null>(null)
   const [regenOpen,       setRegenOpen]       = useState(false)
@@ -120,9 +400,16 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
   const [modelOptions,    setModelOptions]    = useState<{ value: string; label: string }[]>([])
   const [promptMode,      setPromptMode]      = useState<'instructions' | 'custom'>('instructions')
 
+  // Inline editing state
+  const [localOverrides,  setLocalOverrides]  = useState<Partial<ModuleContent>>({})
+  const [editingField,    setEditingField]    = useState<string | null>(null)
+  const [fieldDraft,      setFieldDraft]      = useState('')
+  const [savingField,     setSavingField]     = useState(false)
+
   const activities   = mc?.activities_snapshot ?? []
-  const hasLecture   = !!(mc?.lecture_html?.trim())
-  const forumQ       = mc?.forum_question?.trim() || mc?.discussion_question?.trim() || ''
+  const lectureHtml  = (localOverrides.lecture_html  ?? mc?.lecture_html  ?? '').trim()
+  const forumQ       = (localOverrides.forum_question ?? mc?.forum_question ?? mc?.discussion_question ?? '').trim()
+  const hasLecture   = !!lectureHtml
 
   // Glossary: prefer rich {term,definition} array; fall back to string[] terms
   const glossaryRich: GlossaryEntry[] = mc?.glossary?.length
@@ -205,6 +492,29 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
     }
   }
 
+  const startEdit = (field: string, current: string) => {
+    setEditingField(field)
+    setFieldDraft(current)
+  }
+
+  const cancelEdit = () => { setEditingField(null); setFieldDraft('') }
+
+  const saveField = async () => {
+    if (!onFieldEdit || !editingField) return
+    setSavingField(true)
+    try {
+      await onFieldEdit(mod.number, editingField, fieldDraft)
+      setLocalOverrides(prev => ({ ...prev, [editingField]: fieldDraft }))
+      setEditingField(null)
+      setFieldDraft('')
+      notifications.show({ title: 'Saved', message: `${mod.title} updated`, color: 'green' })
+    } catch (e: any) {
+      notifications.show({ title: 'Save failed', message: e.message, color: 'red' })
+    } finally {
+      setSavingField(false)
+    }
+  }
+
   return (
     <>
       <Accordion.Item value={String(mod.number)}>
@@ -239,18 +549,77 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps }: {
 
             {/* Lecture */}
             {hasLecture && (
-              <Box p="xs" style={{ background: 'var(--mantine-color-gray-0)', borderRadius: 6, fontSize: 13, lineHeight: 1.6 }}>
-                <TypographyStylesProvider>
-                  <div dangerouslySetInnerHTML={{ __html: mc!.lecture_html! }} />
-                </TypographyStylesProvider>
+              <Box>
+                {editingField === 'lecture_html' ? (
+                  <Stack gap="xs">
+                    <Textarea
+                      autosize minRows={6}
+                      value={fieldDraft}
+                      onChange={e => setFieldDraft(e.currentTarget.value)}
+                      styles={{ input: { fontFamily: 'monospace', fontSize: 12 } }}
+                    />
+                    <Group gap="xs">
+                      <ActionIcon size="sm" color="green" variant="filled" loading={savingField} onClick={saveField}>
+                        <IconCheck size={12} />
+                      </ActionIcon>
+                      <ActionIcon size="sm" color="gray" variant="subtle" onClick={cancelEdit}>
+                        <IconX size={12} />
+                      </ActionIcon>
+                    </Group>
+                  </Stack>
+                ) : (
+                  <Box
+                    p="xs"
+                    style={{ position: 'relative', background: 'var(--mantine-color-gray-0)', borderRadius: 6, fontSize: 13, lineHeight: 1.6 }}
+                  >
+                    {onFieldEdit && (
+                      <ActionIcon
+                        size="xs" variant="subtle" color="gray"
+                        style={{ position: 'absolute', top: 6, right: 6 }}
+                        onClick={() => startEdit('lecture_html', lectureHtml)}
+                      >
+                        <IconPencil size={12} />
+                      </ActionIcon>
+                    )}
+                    <TypographyStylesProvider>
+                      <div dangerouslySetInnerHTML={{ __html: lectureHtml }} />
+                    </TypographyStylesProvider>
+                  </Box>
+                )}
               </Box>
             )}
 
             {/* Forum question */}
             {forumQ && (
               <Box p="xs" style={{ background: 'var(--mantine-color-blue-0)', borderRadius: 6, borderLeft: '3px solid var(--mantine-color-blue-4)' }}>
-                <Text size="xs" fw={600} c="blue" mb={4}>Forum Discussion Question</Text>
-                <Text size="xs">{forumQ}</Text>
+                <Group gap={4} mb={4} align="center">
+                  <Text size="xs" fw={600} c="blue">Forum Discussion Question</Text>
+                  {onFieldEdit && editingField !== 'forum_question' && (
+                    <ActionIcon size="xs" variant="subtle" color="blue"
+                      onClick={() => startEdit('forum_question', forumQ)}>
+                      <IconPencil size={12} />
+                    </ActionIcon>
+                  )}
+                </Group>
+                {editingField === 'forum_question' ? (
+                  <Stack gap="xs">
+                    <Textarea
+                      autosize minRows={3}
+                      value={fieldDraft}
+                      onChange={e => setFieldDraft(e.currentTarget.value)}
+                    />
+                    <Group gap="xs">
+                      <ActionIcon size="sm" color="green" variant="filled" loading={savingField} onClick={saveField}>
+                        <IconCheck size={12} />
+                      </ActionIcon>
+                      <ActionIcon size="sm" color="gray" variant="subtle" onClick={cancelEdit}>
+                        <IconX size={12} />
+                      </ActionIcon>
+                    </Group>
+                  </Stack>
+                ) : (
+                  <Text size="xs">{forumQ}</Text>
+                )}
               </Box>
             )}
 
@@ -437,31 +806,131 @@ interface CourseViewerProps {
   content: Record<string, any>
   moodleCourseId?: number
   editProps?: EditProps
+  onFieldEdit?: (moduleNum: number, field: string, value: string) => Promise<void>
+  onQuizSave?: (questions: QuizQuestion[]) => Promise<void>
+  bibleValidation?: { shortname: string; versionId: number }
 }
 
-export function CourseViewer({ content, moodleCourseId, editProps }: CourseViewerProps) {
-  const modules: ModuleItem[] = content?.course_structure?.modules ?? []
-  const mcs: ModuleContent[]  = content?.module_contents ?? []
+export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, onQuizSave, bibleValidation }: CourseViewerProps) {
+  const modules: ModuleItem[]    = content?.course_structure?.modules ?? []
+  const mcs: ModuleContent[]     = content?.module_contents ?? []
+  const quizQuestions: QuizQuestion[] = content?.quiz_questions ?? []
+
+  const [quizEditing, setQuizEditing] = useState(false)
 
   if (!modules.length) {
     return <Text size="sm" c="dimmed" ta="center" py="xl">No module content stored for this version.</Text>
   }
 
   return (
-    <Accordion chevronPosition="left" multiple>
-      {modules.map(mod => {
-        const mc = mcs.find(m => m.module_num === mod.number)
-            ?? (mcs[mod.number - 1]?.module_num === undefined ? mcs[mod.number - 1] : undefined)
-        return (
-          <ModulePanel
-            key={mod.number}
-            mod={mod}
-            mc={mc}
-            moodleCourseId={moodleCourseId}
-            editProps={editProps ? { ...editProps, moduleNum: mod.number } : undefined}
-          />
-        )
-      })}
-    </Accordion>
+    <Stack gap={0}>
+      <Accordion chevronPosition="left" multiple>
+        {modules.map(mod => {
+          const mc = mcs.find(m => m.module_num === mod.number)
+              ?? (mcs[mod.number - 1]?.module_num === undefined ? mcs[mod.number - 1] : undefined)
+          return (
+            <ModulePanel
+              key={mod.number}
+              mod={mod}
+              mc={mc}
+              moodleCourseId={moodleCourseId}
+              editProps={editProps ? { ...editProps, moduleNum: mod.number } : undefined}
+              onFieldEdit={onFieldEdit}
+            />
+          )
+        })}
+      </Accordion>
+
+      {/* Bible Reference Validator — shown when shortname+versionId are supplied */}
+      {bibleValidation && (
+        <Box mt="sm">
+          <Accordion chevronPosition="left">
+            <Accordion.Item value="bible-refs">
+              <Accordion.Control>
+                <Text size="sm" fw={600}>Bible References</Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <BibleRefsPanel
+                  shortname={bibleValidation.shortname}
+                  versionId={bibleValidation.versionId}
+                />
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+        </Box>
+      )}
+
+      {/* Quiz section — always visible when editing is available, or when questions exist */}
+      {(quizQuestions.length > 0 || onQuizSave) && (
+        <Box mt="sm">
+          <Accordion chevronPosition="left">
+            <Accordion.Item value="quiz">
+              <Accordion.Control>
+                <Group gap="xs">
+                  <Text size="sm" fw={600}>Quiz Bank</Text>
+                  <Badge size="xs" color={quizQuestions.length > 0 ? 'orange' : 'gray'} variant="light">
+                    {quizQuestions.length} questions
+                  </Badge>
+                  {onQuizSave && !quizEditing && (
+                    <Badge
+                      size="xs" color="violet" variant="outline"
+                      style={{ cursor: 'pointer' }}
+                      onClick={e => { e.stopPropagation(); setQuizEditing(true) }}
+                    >
+                      Edit
+                    </Badge>
+                  )}
+                </Group>
+              </Accordion.Control>
+              <Accordion.Panel>
+                {quizEditing && onQuizSave ? (
+                  <QuizEditor
+                    questions={quizQuestions}
+                    onSave={async qs => {
+                      await onQuizSave(qs)
+                      setQuizEditing(false)
+                      notifications.show({ title: 'Quiz saved', message: `${qs.length} questions`, color: 'green' })
+                    }}
+                    onCancel={() => setQuizEditing(false)}
+                  />
+                ) : quizQuestions.length === 0 ? (
+                  <Stack align="center" py="md" gap="xs">
+                    <Text size="sm" c="dimmed">No quiz questions yet.</Text>
+                    {onQuizSave && (
+                      <Button size="xs" variant="light" color="orange"
+                              leftSection={<IconPlus size={13} />}
+                              onClick={() => setQuizEditing(true)}>
+                        Add Questions
+                      </Button>
+                    )}
+                  </Stack>
+                ) : (
+                  <Stack gap="sm">
+                    {quizQuestions.map((q, i) => (
+                      <Box key={i} p="xs" style={{ borderLeft: '2px solid var(--mantine-color-orange-3)', paddingLeft: 10 }}>
+                        <Text size="xs" fw={500} mb={4}>{i + 1}. {q.question}</Text>
+                        <Stack gap={2}>
+                          {(q.options ?? []).map((opt, oi) => (
+                            <Text
+                              key={oi} size="xs"
+                              c={oi === q.correct_index ? 'green' : 'dimmed'}
+                              fw={oi === q.correct_index ? 600 : 400}
+                            >
+                              {String.fromCharCode(65 + oi)}) {opt}
+                              {oi === q.correct_index && ' ✓'}
+                            </Text>
+                          ))}
+                        </Stack>
+                        {q.explanation && <Text size="xs" c="dimmed" mt={4} fs="italic">{q.explanation}</Text>}
+                      </Box>
+                    ))}
+                  </Stack>
+                )}
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+        </Box>
+      )}
+    </Stack>
   )
 }

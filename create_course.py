@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Moodle Course Administrator — Colegio Teológico Biblos
+Moodle Course Administrator
 Generates a Moodle 5.x .mbz backup from a content prompt using a local LLM.
 
 Usage:
@@ -34,7 +34,7 @@ import requests
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 DEFAULT_LLM_URL = "http://192.168.86.41:1234/v1"
-COLLEGE_NAME    = "COLEGIO TEOLOGICO BIBLOS"
+COLLEGE_NAME    = "YOUR INSTITUTION"
 DEFAULT_PROF    = "Ricardo Julia"
 DEFAULT_EMAIL   = "ricardojjulia@gmail.com"
 DEFAULT_PHONE   = "813-466-8930"
@@ -989,7 +989,7 @@ def build_mbz(config, content):
     <mnet_remoteusers>0</mnet_remoteusers>
     <include_files>1</include_files>
     <include_file_references_to_external_content>0</include_file_references_to_external_content>
-    <original_wwwroot>https://biblos.moodlecloud.com</original_wwwroot>
+    <original_wwwroot>https://your-moodle.example.com</original_wwwroot>
     <original_site_identifier_hash>{rand_hex(32)}</original_site_identifier_hash>
     <original_course_id>0</original_course_id>
     <original_course_format>weeks</original_course_format>
@@ -1880,7 +1880,7 @@ def build_mbz(config, content):
                 add_activity_aux(adir, grades_body=forum_grades_body)
 
         # ── questions.xml ──────────────────────────────────────────────────────
-        stamp_base = f"biblos.moodlecloud.com+{datetime.now().strftime('%y%m%d%H%M%S')}"
+        stamp_base = f"moodle-course-creator+{datetime.now().strftime('%y%m%d%H%M%S')}"
         qbe_lines  = []
         for q_idx, q in enumerate(quiz_questions):
             qbe_id  = q_idx + 1
@@ -2252,7 +2252,7 @@ def main():
     print(f"  ✓ Created: {output_file}  ({size_kb:.1f} KB)")
     print(f"{'='*55}")
     print(f"\nImport steps:")
-    print(f"  1. Log in to biblos.moodlecloud.com as admin")
+    print(f"  1. Log in to your Moodle instance as admin")
     print(f"  2. Site administration → Restore")
     print(f"  3. Upload {output_file} and follow the wizard")
     print()
