@@ -3,6 +3,7 @@
  * Used by Library (read-only) and Course Studio Review (editable).
  */
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Accordion, Badge, Box, Button, Checkbox, Group, Loader,
   Modal, ScrollArea, Stack, Table, Text, ActionIcon,
@@ -52,6 +53,7 @@ function ActivityModal({ activity, moodleCourseId, onClose }: {
   moodleCourseId?: number
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [html,    setHtml]  = useState<string | null>(null)
   const [loading, setLoad]  = useState(false)
   const [tried,   setTried] = useState(false)
@@ -85,15 +87,15 @@ function ActivityModal({ activity, moodleCourseId, onClose }: {
       {!tried && !loading && (
         <Stack align="center" py="xl" gap="sm">
           <Text size="sm" c="dimmed">
-            {moodleCourseId ? 'Content not stored locally.' : 'No content stored for this activity.'}
+            {moodleCourseId ? t('cv.not_stored_local') : t('cv.not_stored_activity')}
           </Text>
           {moodleCourseId && (
             <Button size="sm" variant="light" leftSection={<IconExternalLink size={14} />}
-                    onClick={fetchFromMoodle}>Load from Moodle</Button>
+                    onClick={fetchFromMoodle}>{t('cv.load_from_moodle')}</Button>
           )}
         </Stack>
       )}
-      {loading && <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">Loading…</Text></Stack>}
+      {loading && <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">{t('cv.loading')}</Text></Stack>}
       {tried && !loading && html && (
         html.trim().startsWith('<')
           ? <TypographyStylesProvider><div dangerouslySetInnerHTML={{ __html: html }} /></TypographyStylesProvider>
@@ -116,6 +118,7 @@ function QuizEditor({
   onSave: (qs: QuizQuestion[]) => Promise<void>
   onCancel: () => void
 }) {
+  const { t } = useTranslation()
   const [qs,     setQs]     = useState<QuizQuestion[]>(() =>
     initial.map(q => ({ ...q, options: [...(q.options ?? ['','','',''])] }))
   )
@@ -181,20 +184,20 @@ function QuizEditor({
     <Stack gap="sm">
       <input ref={importRef} type="file" accept=".json" title="Import quiz questions JSON" aria-label="Import quiz questions JSON" hidden onChange={handleImport} />
       <Group justify="space-between" wrap="wrap">
-        <Text size="sm" fw={600}>{qs.length} questions</Text>
+        <Text size="sm" fw={600}>{t('cv.n_questions', { count: qs.length })}</Text>
         <Group gap="xs">
           <Button size="xs" variant="subtle" leftSection={<IconUpload size={12} />}
                   onClick={() => importRef.current?.click()}>
-            Import
+            {t('cv.import_quiz')}
           </Button>
           <Button size="xs" variant="subtle" leftSection={<IconDownload size={12} />}
                   onClick={handleExport} disabled={qs.length === 0}>
-            Export
+            {t('cv.export_quiz')}
           </Button>
-          <Button size="xs" variant="subtle" onClick={onCancel}>Cancel</Button>
+          <Button size="xs" variant="subtle" onClick={onCancel}>{t('common.cancel')}</Button>
           <Button size="xs" color="green" leftSection={<IconDeviceFloppy size={13} />}
                   loading={saving} onClick={handleSave}>
-            Save Quiz
+            {t('cv.save_quiz')}
           </Button>
         </Group>
       </Group>
@@ -223,7 +226,7 @@ function QuizEditor({
               </Group>
 
               <Textarea
-                size="xs" label="Question" minRows={2} autosize mb="xs"
+                size="xs" label={t('cv.question_label')} minRows={2} autosize mb="xs"
                 value={q.question}
                 onChange={e => update(qi, { question: e.currentTarget.value })}
               />
@@ -257,7 +260,7 @@ function QuizEditor({
               </Stack>
 
               <TextInput
-                size="xs" label="Explanation (optional)"
+                size="xs" label={t('cv.explanation_optional')}
                 value={q.explanation ?? ''}
                 onChange={e => update(qi, { explanation: e.currentTarget.value })}
               />
@@ -269,7 +272,7 @@ function QuizEditor({
             leftSection={<IconPlus size={13} />}
             onClick={() => setQs(prev => [...prev, EMPTY_QUESTION()])}
           >
-            Add Question
+            {t('cv.add_question_btn')}
           </Button>
         </Stack>
       </ScrollArea>
@@ -281,19 +284,24 @@ function QuizEditor({
 
 const STATUS_COLOR: Record<BibleRef['status'], string> = {
   valid:                'green',
-  verse_likely_ok:      'yellow',
   unknown_book:         'red',
   chapter_out_of_range: 'red',
+  verse_out_of_range:   'orange',
 }
 
-const STATUS_LABEL: Record<BibleRef['status'], string> = {
-  valid:                'Valid',
-  verse_likely_ok:      'OK',
-  unknown_book:         'Unknown book',
-  chapter_out_of_range: 'Ch. out of range',
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+function statusLabel(status: BibleRef['status'], t: TFn): string {
+  switch (status) {
+    case 'valid':                return t('cv.valid')
+    case 'unknown_book':         return t('cv.unknown_book')
+    case 'chapter_out_of_range': return t('cv.ch_oor')
+    case 'verse_out_of_range':   return t('cv.verse_oor')
+  }
 }
 
 function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId: number }) {
+  const { t } = useTranslation()
   const [refs,    setRefs]    = useState<BibleRef[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
@@ -311,19 +319,19 @@ function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId
     }
   }
 
-  const valid   = refs?.filter(r => r.status === 'valid' || r.status === 'verse_likely_ok').length ?? 0
-  const flagged = refs?.filter(r => r.status !== 'valid' && r.status !== 'verse_likely_ok').length ?? 0
+  const valid   = refs?.filter(r => r.status === 'valid').length ?? 0
+  const flagged = refs?.filter(r => r.status !== 'valid').length ?? 0
 
   return (
     <Stack gap="sm">
       <Group justify="space-between">
         {refs === null ? (
-          <Text size="xs" c="dimmed">Scan course text for Bible citations.</Text>
+          <Text size="xs" c="dimmed">{t('cv.scan_prompt')}</Text>
         ) : (
           <Group gap="xs">
-            <Badge size="xs" color="gray"   variant="light">{refs.length} references</Badge>
-            <Badge size="xs" color="green"  variant="light">{valid} valid</Badge>
-            {flagged > 0 && <Badge size="xs" color="red" variant="light">{flagged} flagged</Badge>}
+            <Badge size="xs" color="gray"   variant="light">{t('cv.n_refs', { count: refs.length })}</Badge>
+            <Badge size="xs" color="green"  variant="light">{t('cv.n_valid', { count: valid })}</Badge>
+            {flagged > 0 && <Badge size="xs" color="red" variant="light">{t('cv.n_flagged', { count: flagged })}</Badge>}
           </Group>
         )}
         <Button
@@ -332,14 +340,14 @@ function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId
           onClick={scan}
           loading={loading}
         >
-          {refs === null ? 'Scan' : 'Re-scan'}
+          {refs === null ? t('cv.scan') : t('cv.rescan')}
         </Button>
       </Group>
 
       {error && <Text size="xs" c="red">{error}</Text>}
 
       {refs && refs.length === 0 && (
-        <Text size="xs" c="dimmed" ta="center" py="xs">No Bible references found in this version.</Text>
+        <Text size="xs" c="dimmed" ta="center" py="xs">{t('cv.no_bible_refs')}</Text>
       )}
 
       {refs && refs.length > 0 && (
@@ -347,10 +355,10 @@ function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId
           <Table withTableBorder={false} withRowBorders highlightOnHover fz="xs">
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>Reference</Table.Th>
-                <Table.Th>Book</Table.Th>
-                <Table.Th>Source</Table.Th>
-                <Table.Th>Status</Table.Th>
+                <Table.Th>{t('cv.th_reference')}</Table.Th>
+                <Table.Th>{t('cv.th_book')}</Table.Th>
+                <Table.Th>{t('cv.th_source')}</Table.Th>
+                <Table.Th>{t('cv.th_status')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -369,7 +377,7 @@ function BibleRefsPanel({ shortname, versionId }: { shortname: string; versionId
                   </Table.Td>
                   <Table.Td>
                     <Badge size="xs" color={STATUS_COLOR[r.status]} variant="light">
-                      {STATUS_LABEL[r.status]}
+                      {statusLabel(r.status, t as TFn)}
                     </Badge>
                   </Table.Td>
                 </Table.Tr>
@@ -391,6 +399,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
   editProps?: EditProps & { moduleNum: number }
   onFieldEdit?: (moduleNum: number, field: string, value: string) => Promise<void>
 }) {
+  const { t } = useTranslation()
   const [activeActivity,  setActiveActivity]  = useState<ActivitySnap | null>(null)
   const [regenOpen,       setRegenOpen]       = useState(false)
   const [instructions,    setInstructions]    = useState('')
@@ -468,10 +477,10 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
           custom_prompt: promptMode === 'custom' ? customPrompt : '',
         })
       editProps.onModuleRegenerated(mod.number, res.module_content as any)
-      notifications.show({ title: 'Module regenerated', message: mod.title, color: 'green' })
+      notifications.show({ title: t('cv.notif_regen_done'), message: mod.title, color: 'green' })
       setInstructions('')
     } catch (e: any) {
-      notifications.show({ title: 'Regeneration failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('cv.notif_regen_fail'), message: e.message, color: 'red' })
     } finally {
       setRegenerating(false)
     }
@@ -488,7 +497,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
       )
       editProps.onHwSpecChanged(updated.content as any)
     } catch (e: any) {
-      notifications.show({ title: 'Update failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('cv.notif_update_fail'), message: e.message, color: 'red' })
     }
   }
 
@@ -507,9 +516,9 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
       setLocalOverrides(prev => ({ ...prev, [editingField]: fieldDraft }))
       setEditingField(null)
       setFieldDraft('')
-      notifications.show({ title: 'Saved', message: `${mod.title} updated`, color: 'green' })
+      notifications.show({ title: t('cv.notif_saved'), message: `${mod.title} updated`, color: 'green' })
     } catch (e: any) {
-      notifications.show({ title: 'Save failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('cv.notif_save_fail'), message: e.message, color: 'red' })
     } finally {
       setSavingField(false)
     }
@@ -524,14 +533,14 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
             <Group gap={4} style={{ flexShrink: 0 }}>
               {activities.length > 0 && (
                 <Badge size="xs" variant="outline" color="gray">
-                  {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
+                  {t('cv.n_activities', { count: activities.length })}
                 </Badge>
               )}
-              {glossaryRich.length > 0 && <Badge size="xs" variant="outline" color="teal">{glossaryRich.length} terms</Badge>}
-              {forumQ && <Badge size="xs" variant="outline" color="blue">forum</Badge>}
-              {hasLecture && <Badge size="xs" variant="outline" color="violet">lecture</Badge>}
-              {modHw === 'assign' && <Badge size="xs" variant="filled" color="orange">assignment</Badge>}
-              {modHw === 'forum'  && <Badge size="xs" variant="filled" color="teal">hw forum</Badge>}
+              {glossaryRich.length > 0 && <Badge size="xs" variant="outline" color="teal">{t('cv.n_terms', { count: glossaryRich.length })}</Badge>}
+              {forumQ && <Badge size="xs" variant="outline" color="blue">{t('cv.badge_forum')}</Badge>}
+              {hasLecture && <Badge size="xs" variant="outline" color="violet">{t('cv.badge_lecture')}</Badge>}
+              {modHw === 'assign' && <Badge size="xs" variant="filled" color="orange">{t('cv.badge_assignment')}</Badge>}
+              {modHw === 'forum'  && <Badge size="xs" variant="filled" color="teal">{t('cv.badge_hw_forum')}</Badge>}
             </Group>
           </Group>
         </Accordion.Control>
@@ -593,7 +602,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
             {forumQ && (
               <Box p="xs" style={{ background: 'var(--mantine-color-blue-0)', borderRadius: 6, borderLeft: '3px solid var(--mantine-color-blue-4)' }}>
                 <Group gap={4} mb={4} align="center">
-                  <Text size="xs" fw={600} c="blue">Forum Discussion Question</Text>
+                  <Text size="xs" fw={600} c="blue">{t('cv.forum_discussion_q')}</Text>
                   {onFieldEdit && editingField !== 'forum_question' && (
                     <ActionIcon size="xs" variant="subtle" color="blue"
                       onClick={() => startEdit('forum_question', forumQ)}>
@@ -626,7 +635,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
             {/* Glossary with definitions */}
             {glossaryRich.length > 0 && (
               <Box p="xs" style={{ background: 'var(--mantine-color-teal-0)', borderRadius: 6, borderLeft: '3px solid var(--mantine-color-teal-4)' }}>
-                <Text size="xs" fw={600} c="teal" mb={6}>Glossary ({glossaryRich.length} terms)</Text>
+                <Text size="xs" fw={600} c="teal" mb={6}>{t('cv.glossary_n', { count: glossaryRich.length })}</Text>
                 <Stack gap={4}>
                   {glossaryRich.map(({ term, definition }) => (
                     <Group key={term} gap="xs" align="flex-start" wrap="nowrap">
@@ -673,16 +682,16 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
                 <Group justify="space-between" wrap="nowrap">
                   {/* Activity toggles */}
                   <Group gap="sm">
-                    <Text size="xs" c="dimmed" fw={500}>Extra activity:</Text>
+                    <Text size="xs" c="dimmed" fw={500}>{t('cv.extra_activity')}</Text>
                     <Checkbox
                       size="xs"
-                      label="Assignment"
+                      label={t('cv.assignment')}
                       checked={modHw === 'assign'}
                       onChange={e => setActivity(e.currentTarget.checked ? 'assign' : null)}
                     />
                     <Checkbox
                       size="xs"
-                      label="Forum"
+                      label={t('cv.forum')}
                       checked={modHw === 'forum'}
                       onChange={e => setActivity(e.currentTarget.checked ? 'forum' : null)}
                     />
@@ -697,7 +706,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
                     onClick={openRegenModal}
                     disabled={regenerating}
                   >
-                    {regenerating ? 'Regenerating…' : 'Regenerate'}
+                    {regenerating ? t('cv.regenerating') : t('cv.regenerate')}
                   </Button>
                 </Group>
               </>
@@ -716,14 +725,14 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
       <Modal
         opened={regenOpen}
         onClose={() => setRegenOpen(false)}
-        title={<Text fw={600} size="sm">Regenerate — {mod.title}</Text>}
+        title={<Text fw={600} size="sm">{t('cv.regen_modal_title', { title: mod.title })}</Text>}
         size="lg"
       >
         <Stack gap="sm">
           {/* Model selector */}
           <Select
-            label="Model"
-            description="Leave blank to use the model that generated this version"
+            label={t('cv.model_label')}
+            description={t('cv.model_desc')}
             placeholder={editProps?.defaultModelId ?? 'default'}
             data={modelOptions}
             value={regenModel || null}
@@ -732,7 +741,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
             searchable
           />
 
-          <Divider label="Prompt" labelPosition="left" />
+          <Divider label={t('cv.prompt_divider')} labelPosition="left" />
 
           {/* Mode toggle */}
           <Group gap="xs">
@@ -741,19 +750,19 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
               variant={promptMode === 'instructions' ? 'filled' : 'light'}
               color="violet"
               onClick={() => setPromptMode('instructions')}
-            >Instructions</Button>
+            >{t('cv.instructions_btn')}</Button>
             <Button
               size="xs"
               variant={promptMode === 'custom' ? 'filled' : 'light'}
               color="violet"
               onClick={() => setPromptMode('custom')}
-            >Full prompt</Button>
+            >{t('cv.full_prompt_btn')}</Button>
           </Group>
 
           {promptMode === 'instructions' && (
             <Textarea
-              placeholder="e.g. Focus more on practical examples. Add a section on historical context. Keep definitions under 20 words."
-              description="Appended to the default prompt as additional instructions"
+              placeholder={t('cv.instructions_placeholder')}
+              description={t('cv.instructions_desc')}
               minRows={4}
               autosize
               value={instructions}
@@ -763,7 +772,7 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
 
           {promptMode === 'custom' && (
             <Textarea
-              description="Replaces the entire default prompt — the model receives exactly this text"
+              description={t('cv.custom_prompt_desc')}
               minRows={10}
               autosize
               value={customPrompt}
@@ -773,13 +782,13 @@ function ModulePanel({ mod, mc, moodleCourseId, editProps, onFieldEdit }: {
           )}
 
           <Group justify="flex-end" gap="xs">
-            <Button variant="subtle" onClick={() => setRegenOpen(false)}>Cancel</Button>
+            <Button variant="subtle" onClick={() => setRegenOpen(false)}>{t('common.cancel')}</Button>
             <Button
               color="violet"
               leftSection={<IconRefresh size={14} />}
               onClick={handleRegenerate}
             >
-              Regenerate
+              {t('cv.regenerate')}
             </Button>
           </Group>
         </Stack>
@@ -812,6 +821,7 @@ interface CourseViewerProps {
 }
 
 export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, onQuizSave, bibleValidation }: CourseViewerProps) {
+  const { t } = useTranslation()
   const modules: ModuleItem[]    = content?.course_structure?.modules ?? []
   const mcs: ModuleContent[]     = content?.module_contents ?? []
   const quizQuestions: QuizQuestion[] = content?.quiz_questions ?? []
@@ -819,7 +829,7 @@ export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, 
   const [quizEditing, setQuizEditing] = useState(false)
 
   if (!modules.length) {
-    return <Text size="sm" c="dimmed" ta="center" py="xl">No module content stored for this version.</Text>
+    return <Text size="sm" c="dimmed" ta="center" py="xl">{t('cv.no_content')}</Text>
   }
 
   return (
@@ -847,7 +857,7 @@ export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, 
           <Accordion chevronPosition="left">
             <Accordion.Item value="bible-refs">
               <Accordion.Control>
-                <Text size="sm" fw={600}>Bible References</Text>
+                <Text size="sm" fw={600}>{t('cv.bible_refs')}</Text>
               </Accordion.Control>
               <Accordion.Panel>
                 <BibleRefsPanel
@@ -867,9 +877,9 @@ export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, 
             <Accordion.Item value="quiz">
               <Accordion.Control>
                 <Group gap="xs">
-                  <Text size="sm" fw={600}>Quiz Bank</Text>
+                  <Text size="sm" fw={600}>{t('cv.quiz_bank')}</Text>
                   <Badge size="xs" color={quizQuestions.length > 0 ? 'orange' : 'gray'} variant="light">
-                    {quizQuestions.length} questions
+                    {t('cv.n_questions', { count: quizQuestions.length })}
                   </Badge>
                   {onQuizSave && !quizEditing && (
                     <Badge
@@ -877,7 +887,7 @@ export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, 
                       style={{ cursor: 'pointer' }}
                       onClick={e => { e.stopPropagation(); setQuizEditing(true) }}
                     >
-                      Edit
+                      {t('cv.edit_badge')}
                     </Badge>
                   )}
                 </Group>
@@ -889,18 +899,18 @@ export function CourseViewer({ content, moodleCourseId, editProps, onFieldEdit, 
                     onSave={async qs => {
                       await onQuizSave(qs)
                       setQuizEditing(false)
-                      notifications.show({ title: 'Quiz saved', message: `${qs.length} questions`, color: 'green' })
+                      notifications.show({ title: t('cv.quiz_saved'), message: t('cv.n_questions', { count: qs.length }), color: 'green' })
                     }}
                     onCancel={() => setQuizEditing(false)}
                   />
                 ) : quizQuestions.length === 0 ? (
                   <Stack align="center" py="md" gap="xs">
-                    <Text size="sm" c="dimmed">No quiz questions yet.</Text>
+                    <Text size="sm" c="dimmed">{t('cv.no_quiz_yet')}</Text>
                     {onQuizSave && (
                       <Button size="xs" variant="light" color="orange"
                               leftSection={<IconPlus size={13} />}
                               onClick={() => setQuizEditing(true)}>
-                        Add Questions
+                        {t('cv.add_questions_btn')}
                       </Button>
                     )}
                   </Stack>

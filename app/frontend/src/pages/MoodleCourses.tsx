@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Stack, Title, Text, Badge, Group, Button, Select,
   Paper, Loader, Alert, Table, ActionIcon,
@@ -66,8 +67,10 @@ function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose
   opened: boolean
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [libShortnames, setLibShortnames] = useState<Set<string>>(new Set())
-  const [avgUsers,      setAvgUsers]      = useState<number | null>(null)
+  const [siteUsers,     setSiteUsers]     = useState<number | null>(null)
+  const [activeUsers,   setActiveUsers]   = useState<number | null>(null)
   const [loading,       setLoading]       = useState(false)
 
   useEffect(() => {
@@ -76,8 +79,8 @@ function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose
     Promise.all([
       api.courses.list().then(list => setLibShortnames(new Set(list.map(c => c.shortname)))),
       api.moodle.stats().then(s => {
-        if (s.total_users != null && courses.length > 0)
-          setAvgUsers(Math.round(s.total_users / courses.length))
+        if (s.total_users != null) setSiteUsers(s.total_users)
+        if (s.active_30d  != null) setActiveUsers(s.active_30d)
       }).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [opened])
@@ -102,7 +105,7 @@ function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose
           <ThemeIcon size="sm" variant="light" color="blue">
             <IconCloud size={14} />
           </ThemeIcon>
-          <Text fw={600} size="sm">{siteName} — Course Evaluator</Text>
+          <Text fw={600} size="sm">{t('moodle.dash_title', { site: siteName })}</Text>
         </Group>
       }
       size="lg"
@@ -114,50 +117,52 @@ function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose
           <SimpleGrid cols={2} spacing="sm">
             <StatCard
               icon={<IconBook2 size={16} />}
-              label="Total Courses"
+              label={t('moodle.dash_total_courses')}
               value={totalCourses}
               color="blue"
             />
             <StatCard
               icon={<IconCategory size={16} />}
-              label="Total Categories"
+              label={t('moodle.dash_total_cats')}
               value={totalCategories}
               color="teal"
             />
             <StatCard
               icon={<IconClock size={16} />}
-              label="Avg Course Duration"
+              label={t('moodle.dash_avg_duration')}
               value={avgDays !== null ? `${avgDays}d` : '—'}
               color="violet"
               sub={avgDays !== null
-                ? `≈ ${Math.round(avgDays / 7)} weeks`
-                : 'No date data available'}
+                ? t('moodle.dash_weeks', { n: Math.round(avgDays / 7) })
+                : t('moodle.dash_no_dates')}
             />
             <StatCard
               icon={<IconUsers size={16} />}
-              label="Avg Users / Course"
-              value={avgUsers !== null ? avgUsers : '—'}
+              label={t('moodle.dash_site_users')}
+              value={siteUsers !== null ? siteUsers : '—'}
               color="orange"
-              sub={avgUsers !== null ? 'Site users ÷ total courses' : 'Could not retrieve'}
+              sub={siteUsers !== null
+                ? t('moodle.dash_active_30', { n: activeUsers ?? '?' })
+                : t('moodle.dash_no_users')}
             />
           </SimpleGrid>
 
-          <Divider label="Library Coverage" labelPosition="center" />
+          <Divider label={t('moodle.dash_lib_coverage')} labelPosition="center" />
 
           <Group grow align="flex-start" gap="sm">
             <StatCard
               icon={<IconFileCheck size={16} />}
-              label="Imported to Library"
+              label={t('moodle.dash_imported')}
               value={inLibrary}
               color="green"
-              sub={`${libPct}% of total`}
+              sub={t('moodle.dash_pct_total', { pct: libPct })}
             />
             <StatCard
               icon={<IconFileX size={16} />}
-              label="Not in Library"
+              label={t('moodle.dash_not_imported')}
               value={notInLibrary}
               color="red"
-              sub={`${100 - libPct}% of total`}
+              sub={t('moodle.dash_pct_total', { pct: 100 - libPct })}
             />
           </Group>
 
@@ -174,9 +179,9 @@ function MoodleInstanceDashboard({ siteName, courses, catGroups, opened, onClose
                   label={<Text ta="center" size="xs" fw={700}>{libPct}%</Text>}
                 />
                 <Box>
-                  <Text size="sm" fw={500}>Library Coverage</Text>
+                  <Text size="sm" fw={500}>{t('moodle.dash_lib_coverage')}</Text>
                   <Text size="xs" c="dimmed">
-                    {inLibrary} of {totalCourses} courses have been imported to the local library
+                    {t('moodle.dash_coverage_desc', { n: inLibrary, total: totalCourses })}
                   </Text>
                 </Box>
               </Group>
@@ -197,6 +202,7 @@ interface PushForumModalProps {
 }
 
 function PushForumModal({ activity, versions, onClose }: PushForumModalProps) {
+  const { t } = useTranslation()
   const [versionId, setVersionId] = useState<string | null>(null)
   const [moduleNum, setModuleNum] = useState<string | null>(null)
   const [subject, setSubject]     = useState('')
@@ -221,7 +227,7 @@ function PushForumModal({ activity, versions, onClose }: PushForumModalProps) {
         setMessage(q)
       }
     } catch (e: any) {
-      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+      notifications.show({ title: t('common.error'), message: e.message, color: 'red' })
     }
   }
 
@@ -229,10 +235,10 @@ function PushForumModal({ activity, versions, onClose }: PushForumModalProps) {
     setPushing(true)
     try {
       await api.moodle.addDiscussion({ forum_id: activity.id, subject, message })
-      notifications.show({ title: 'Posted!', message: `Discussion added to ${activity.name}`, color: 'green' })
+      notifications.show({ title: t('common.posted'), message: t('moodle.notif_forum_posted', { name: activity.name }), color: 'green' })
       onClose()
     } catch (e: any) {
-      notifications.show({ title: 'Failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('common.failed'), message: e.message, color: 'red' })
     } finally {
       setPushing(false)
     }
@@ -240,22 +246,22 @@ function PushForumModal({ activity, versions, onClose }: PushForumModalProps) {
 
   return (
     <Stack>
-      <Text size="sm">Posting to: <strong>{activity.name}</strong></Text>
+      <Text size="sm">{t('moodle.forum_posting_to')} <strong>{activity.name}</strong></Text>
       <Group grow>
-        <Select label="Library version" data={versionOptions} value={versionId} onChange={setVersionId} />
-        <Select label="Module" data={['1','2','3','4','5'].map(n => ({ value: n, label: `Module ${n}` }))}
+        <Select label={t('moodle.forum_lib_version')} data={versionOptions} value={versionId} onChange={setVersionId} />
+        <Select label={t('moodle.forum_module')} data={['1','2','3','4','5'].map(n => ({ value: n, label: t('moodle.forum_module_n', { n }) }))}
                 value={moduleNum} onChange={setModuleNum} />
       </Group>
       <Button size="xs" variant="light" onClick={loadPrompt} disabled={!versionId || !moduleNum}>
-        Load prompt from library
+        {t('moodle.forum_load_prompt')}
       </Button>
-      <Textarea label="Subject" value={subject} onChange={e => setSubject(e.target.value)} />
-      <Textarea label="Message" minRows={4} autosize value={message} onChange={e => setMessage(e.target.value)} />
+      <Textarea label={t('moodle.forum_subject')} value={subject} onChange={e => setSubject(e.target.value)} />
+      <Textarea label={t('moodle.forum_message')} minRows={4} autosize value={message} onChange={e => setMessage(e.target.value)} />
       <Group justify="flex-end">
-        <Button variant="subtle" onClick={onClose}>Cancel</Button>
+        <Button variant="subtle" onClick={onClose}>{t('common.cancel')}</Button>
         <Button leftSection={pushing ? <Loader size="xs" /> : <IconSend size={14} />}
                 onClick={push} disabled={pushing || !subject || !message}>
-          Post Discussion
+          {t('moodle.forum_post')}
         </Button>
       </Group>
     </Stack>
@@ -271,13 +277,14 @@ interface SectionPanelProps {
 }
 
 function SectionPanel({ section, courseId, versions }: SectionPanelProps) {
+  const { t } = useTranslation()
   const [forumModal, setForumModal] = useState<MoodleActivity | null>(null)
 
   return (
     <>
       <Paper withBorder p="sm" radius="md">
         <Text fw={600} size="sm" mb="xs">
-          {section.section === 0 ? '📌 General' : `Week ${section.section}`} · {section.name}
+          {section.section === 0 ? t('moodle.general_section') : t('moodle.week_n', { n: section.section })} · {section.name}
         </Text>
         <Table withTableBorder={false}>
           <Table.Tbody>
@@ -294,14 +301,14 @@ function SectionPanel({ section, courseId, versions }: SectionPanelProps) {
                 </Table.Td>
                 <Table.Td w={36}>
                   {act.modname === 'forum' ? (
-                    <Tooltip label="Post discussion from library">
+                    <Tooltip label={t('moodle.tt_post_discussion')}>
                       <ActionIcon size="xs" variant="light" color="blue"
                                   onClick={() => setForumModal(act)}>
                         <IconSend size={12} />
                       </ActionIcon>
                     </Tooltip>
                   ) : !act.api_updatable ? (
-                    <Tooltip label="Requires .mbz restore">
+                    <Tooltip label={t('moodle.tt_requires_mbz')}>
                       <ActionIcon size="xs" variant="subtle" color="gray" disabled>
                         <IconLock size={12} />
                       </ActionIcon>
@@ -315,7 +322,7 @@ function SectionPanel({ section, courseId, versions }: SectionPanelProps) {
       </Paper>
 
       <Modal opened={!!forumModal} onClose={() => setForumModal(null)}
-             title="Post Discussion to Forum" size="lg">
+             title={t('moodle.forum_modal_title')} size="lg">
         {forumModal && (
           <PushForumModal activity={forumModal} versions={versions}
                           onClose={() => setForumModal(null)} />
@@ -336,6 +343,7 @@ function gradeColor(pct: number | null): string {
 }
 
 function GradesPanel({ courseId }: { courseId: number }) {
+  const { t } = useTranslation()
   const [report,  setReport]  = useState<GradeReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
@@ -349,10 +357,10 @@ function GradesPanel({ courseId }: { courseId: number }) {
       .finally(() => setLoading(false))
   }, [courseId])
 
-  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">Loading grades…</Text></Stack>
-  if (error)   return <Alert color="red" title="Could not load grades">{error}</Alert>
+  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">{t('moodle.grades_loading')}</Text></Stack>
+  if (error)   return <Alert color="red" title={t('moodle.grades_error')}>{error}</Alert>
   if (!report || report.rows.length === 0)
-    return <Text size="sm" c="dimmed" ta="center" py="xl">No grade data available for this course.</Text>
+    return <Text size="sm" c="dimmed" ta="center" py="xl">{t('moodle.grades_empty')}</Text>
 
   const nonTotal = report.columns.filter(c => !c.is_total)
   const total    = report.columns.find(c => c.is_total)
@@ -374,7 +382,7 @@ function GradesPanel({ courseId }: { courseId: number }) {
         <Table.Thead>
           <Table.Tr>
             <Table.Th style={{ minWidth: 160, position: 'sticky', left: 0, background: 'var(--mantine-color-body)', zIndex: 1 }}>
-              Student
+              {t('moodle.grades_student')}
             </Table.Th>
             {nonTotal.map(col => (
               <Table.Th key={col.id} style={{ minWidth: 110, textAlign: 'center' }}>
@@ -384,7 +392,7 @@ function GradesPanel({ courseId }: { courseId: number }) {
             ))}
             {total && (
               <Table.Th style={{ minWidth: 110, textAlign: 'center', background: 'var(--mantine-color-gray-0)' }}>
-                <Text size="xs" fw={700}>Total</Text>
+                <Text size="xs" fw={700}>{t('moodle.grades_total')}</Text>
               </Table.Th>
             )}
           </Table.Tr>
@@ -420,6 +428,7 @@ function GradesPanel({ courseId }: { courseId: number }) {
 // ── Analytics panel ───────────────────────────────────────────────────────────
 
 function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: string }) {
+  const { t } = useTranslation()
   const [data,    setData]    = useState<CourseAnalytics | null>(null)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState<string | null>(null)
@@ -433,8 +442,8 @@ function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: 
       .finally(() => setLoading(false))
   }, [courseId])
 
-  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">Loading analytics…</Text></Stack>
-  if (error)   return <Alert color="red" title="Could not load analytics" icon={<IconAlertTriangle size={14} />}>{error}</Alert>
+  if (loading) return <Stack align="center" py="xl"><Loader /><Text size="sm" c="dimmed">{t('moodle.analytics_loading')}</Text></Stack>
+  if (error)   return <Alert color="red" title={t('moodle.analytics_error')} icon={<IconAlertTriangle size={14} />}>{error}</Alert>
   if (!data)   return null
 
   const enr = data.enrollment
@@ -453,27 +462,27 @@ function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: 
       <SimpleGrid cols={4} spacing="sm">
         <StatCard
           icon={<IconUsers size={16} />}
-          label="Enrolled"
+          label={t('moodle.enrolled')}
           value={enr.total}
           color="blue"
         />
         <StatCard
           icon={<IconUserCheck size={16} />}
-          label="Active (30d)"
+          label={t('moodle.active_30d')}
           value={enr.active_30d}
           color="green"
           sub={enr.total > 0 ? `${Math.round(enr.active_30d / enr.total * 100)}%` : undefined}
         />
         <StatCard
           icon={<IconChartBar size={16} />}
-          label="Pass Rate"
+          label={t('moodle.pass_rate')}
           value={data.pass_rate !== null ? `${data.pass_rate}%` : '—'}
           color={data.pass_rate !== null && data.pass_rate >= 70 ? 'green' : 'red'}
-          sub={data.avg_grade !== null ? `avg ${data.avg_grade}%` : undefined}
+          sub={data.avg_grade !== null ? t('moodle.avg_pct', { n: data.avg_grade }) : undefined}
         />
         <StatCard
           icon={<IconUserOff size={16} />}
-          label="Never Accessed"
+          label={t('moodle.never_accessed')}
           value={enr.never_accessed}
           color={enr.never_accessed > 0 ? 'orange' : 'gray'}
         />
@@ -482,7 +491,7 @@ function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: 
       {/* Grade distribution */}
       {total > 0 && (
         <Paper withBorder p="md" radius="md">
-          <Text size="sm" fw={600} mb="sm">Grade Distribution ({data.student_count} students)</Text>
+          <Text size="sm" fw={600} mb="sm">{t('moodle.grade_dist', { count: data.student_count })}</Text>
           <Stack gap={6}>
             {(['A','B','C','D','F'] as const).map(letter => {
               const count = dist[letter]
@@ -502,20 +511,20 @@ function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: 
       )}
 
       {data.grades_error && (
-        <Alert color="orange" title="Grade data unavailable" py="xs">{data.grades_error}</Alert>
+        <Alert color="orange" title={t('moodle.grades_unavail')} py="xs">{data.grades_error}</Alert>
       )}
 
       {/* Quiz performance */}
       {(data.quizzes || []).length > 0 && (
         <Paper withBorder p="md" radius="md">
-          <Text size="sm" fw={600} mb="sm">Quiz Performance</Text>
+          <Text size="sm" fw={600} mb="sm">{t('moodle.quiz_perf')}</Text>
           <Table withTableBorder highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>Quiz</Table.Th>
-                <Table.Th style={{ textAlign: 'center' }}>Attempts</Table.Th>
-                <Table.Th style={{ textAlign: 'center' }}>Avg Grade</Table.Th>
-                <Table.Th style={{ textAlign: 'center' }}>Pass Rate</Table.Th>
+                <Table.Th>{t('moodle.quiz_name')}</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>{t('moodle.quiz_attempts')}</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>{t('moodle.quiz_avg_grade')}</Table.Th>
+                <Table.Th style={{ textAlign: 'center' }}>{t('moodle.quiz_pass_rate')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -544,25 +553,25 @@ function AnalyticsPanel({ courseId, shortname }: { courseId: number; shortname: 
 
       {/* Weak areas */}
       {weakQuizzes.length > 0 && (
-        <Alert color="orange" title={`${weakQuizzes.length} weak area${weakQuizzes.length > 1 ? 's' : ''} detected`}
+        <Alert color="orange" title={t('moodle.weak_areas', { count: weakQuizzes.length })}
                icon={<IconAlertTriangle size={14} />}>
           <Text size="xs">
-            Quizzes with pass rate below 70%:{' '}
+            {t('moodle.weak_desc')}{' '}
             {weakQuizzes.map(q => q.name).join(', ')}
           </Text>
           {shortname && (
             <Text size="xs" mt={4} c="dimmed">
-              Open this course in the Library → Autonomous Review to regenerate weak modules.
+              {t('moodle.weak_regen')}
             </Text>
           )}
         </Alert>
       )}
 
       {data.enrollment_error && (
-        <Alert color="orange" title="Enrollment data unavailable" py="xs">{data.enrollment_error}</Alert>
+        <Alert color="orange" title={t('moodle.enrollment_unavail')} py="xs">{data.enrollment_error}</Alert>
       )}
       {data.quizzes_error && (
-        <Alert color="orange" title="Quiz data unavailable" py="xs">{data.quizzes_error}</Alert>
+        <Alert color="orange" title={t('moodle.quiz_unavail')} py="xs">{data.quizzes_error}</Alert>
       )}
     </Stack>
   )
@@ -658,6 +667,7 @@ interface BatchItem {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MoodleCoursesPage() {
+  const { t } = useTranslation()
   const [siteName, setSiteName]         = useState<string | null>(null)
   const [courses, setCourses]           = useState<MoodleCourse[]>([])
   const [selected, setSelected]         = useState<MoodleCourse | null>(null)
@@ -688,7 +698,7 @@ export default function MoodleCoursesPage() {
       .catch(() => {})
     api.moodle.courses()
       .then(setCourses)
-      .catch(e => notifications.show({ title: 'Moodle error', message: e.message, color: 'red' }))
+      .catch(e => notifications.show({ title: t('moodle.notif_moodle_error'), message: e.message, color: 'red' }))
       .finally(() => setLoading(false))
   }
 
@@ -714,7 +724,7 @@ export default function MoodleCoursesPage() {
         setLibVersions([])
       }
     } catch (e: any) {
-      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+      notifications.show({ title: t('common.error'), message: e.message, color: 'red' })
     } finally {
       setLoadingSec(false)
     }
@@ -733,15 +743,15 @@ export default function MoodleCoursesPage() {
         category:   selected.category_name,
       })
       notifications.show({
-        title: 'Imported!',
-        message: `${selected.shortname} added to library`,
+        title: t('common.imported'),
+        message: t('moodle.notif_imported', { shortname: selected.shortname }),
         color: 'green',
         icon: <IconCheck />,
       })
       const vers = await api.courses.versions(selected.shortname)
       setLibVersions(vers)
     } catch (e: any) {
-      notifications.show({ title: 'Import failed', message: e.message, color: 'red', icon: <IconX /> })
+      notifications.show({ title: t('moodle.notif_import_failed'), message: e.message, color: 'red', icon: <IconX /> })
     } finally {
       setImporting(false)
     }
@@ -754,10 +764,10 @@ export default function MoodleCoursesPage() {
       const result = await api.moodle.checkBackups(selected.id)
       setBackupFiles(result.files)
       if (result.files.length === 0) {
-        notifications.show({ title: 'No backups found', message: 'No automated .mbz files in this course\'s backup area.', color: 'blue' })
+        notifications.show({ title: t('moodle.notif_no_backups'), message: t('moodle.notif_no_backups_desc'), color: 'blue' })
       }
     } catch (e: any) {
-      notifications.show({ title: 'Check failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('moodle.notif_check_failed'), message: e.message, color: 'red' })
     } finally {
       setCheckingBackup(false)
     }
@@ -774,8 +784,8 @@ export default function MoodleCoursesPage() {
         instance:     siteName || 'Moodle',
       })
       notifications.show({
-        title: 'Added to library!',
-        message: `${file.filename} imported as a new version`,
+        title: t('moodle.notif_backup_added_title'),
+        message: t('moodle.notif_backup_added', { filename: file.filename }),
         color: 'green',
         icon: <IconCheck />,
       })
@@ -784,7 +794,7 @@ export default function MoodleCoursesPage() {
         setLibVersions(vers)
       }
     } catch (e: any) {
-      notifications.show({ title: 'Import failed', message: e.message, color: 'red', icon: <IconX /> })
+      notifications.show({ title: t('moodle.notif_import_failed'), message: e.message, color: 'red', icon: <IconX /> })
     } finally {
       setAddingBackup(null)
     }
@@ -828,16 +838,16 @@ export default function MoodleCoursesPage() {
         .map(c => c.id)
       setCheckedIds(new Set(missingIds))
       if (missingIds.length === 0) {
-        notifications.show({ title: 'All caught up', message: 'Every course is already in the library.', color: 'green' })
+        notifications.show({ title: t('common.all_caught_up'), message: t('moodle.notif_all_in_library'), color: 'green' })
       } else {
         notifications.show({
-          title: `${missingIds.length} missing course${missingIds.length !== 1 ? 's' : ''} selected`,
-          message: 'Ready to import — click "Import selected to library"',
+          title: t('moodle.notif_missing_selected', { count: missingIds.length }),
+          message: t('moodle.notif_missing_desc'),
           color: 'blue',
         })
       }
     } catch (e: any) {
-      notifications.show({ title: 'Error', message: e.message, color: 'red' })
+      notifications.show({ title: t('common.error'), message: e.message, color: 'red' })
     } finally {
       setDetectingMissing(false)
     }
@@ -893,10 +903,10 @@ export default function MoodleCoursesPage() {
     const finalItems = items  // captured before state update
     const errCount = finalItems.filter(i => i.status === 'error').length
     notifications.show({
-      title: errCount > 0 ? `Import complete — ${errCount} failed` : 'Batch import complete',
+      title: errCount > 0 ? t('moodle.notif_batch_partial', { n: errCount }) : t('moodle.notif_batch_complete'),
       message: errCount > 0
-        ? `${finalItems.length - errCount} imported, ${errCount} failed — see error list below`
-        : `${finalItems.length} course${finalItems.length !== 1 ? 's' : ''} imported`,
+        ? t('moodle.notif_batch_partial_desc', { imported: finalItems.length - errCount, failed: errCount })
+        : t('moodle.notif_batch_done', { count: finalItems.length }),
       color: errCount > 0 ? 'orange' : 'green',
     })
   }
@@ -913,7 +923,7 @@ export default function MoodleCoursesPage() {
       {/* ── Header ────────────────────────────────────────────────────── */}
       <Group justify="space-between" wrap="nowrap" style={{ flexShrink: 0 }}>
         <div>
-          <Title order={3}>Instance Course Catalog</Title>
+          <Title order={3}>{t('moodle.title')}</Title>
           {siteName && (
             <Group gap={6} mt={2}>
               <ThemeIcon size="xs" color="blue" variant="light">
@@ -925,21 +935,21 @@ export default function MoodleCoursesPage() {
         </div>
         <Group gap="xs">
           {courses.length > 0 && (
-            <Tooltip label="Auto-select courses not yet in the library">
+            <Tooltip label={t('moodle.select_missing_tt')}>
               <Button
                 variant="light" size="xs" color="teal"
                 leftSection={detectingMissing ? <Loader size="xs" /> : <IconMagnet size={16} />}
                 onClick={selectMissing}
                 disabled={detectingMissing || loading}
               >
-                Select Missing
+                {t('moodle.select_missing')}
               </Button>
             </Tooltip>
           )}
           <Button variant="subtle" size="xs"
                   leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
                   onClick={loadCourses} disabled={loading}>
-            Refresh
+            {t('common.refresh')}
           </Button>
         </Group>
       </Group>
@@ -957,10 +967,10 @@ export default function MoodleCoursesPage() {
             <Stack gap={4}>
               <Group justify="space-between">
                 <Text size="sm" fw={500}>
-                  Importing {batchDone} / {batchTotal}…
+                  {t('moodle.importing_progress', { done: batchDone, total: batchTotal })}
                 </Text>
                 <Text size="xs" c="dimmed">
-                  {batchErrors.length} errors
+                  {t('moodle.errors_count', { count: batchErrors.length })}
                 </Text>
               </Group>
               <Progress value={(batchDone / batchTotal) * 100} animated size="sm" />
@@ -981,7 +991,7 @@ export default function MoodleCoursesPage() {
             <Stack gap={6}>
               <Group justify="space-between">
                 <Text size="sm" fw={600} c="orange">
-                  {batchErrors.length} course{batchErrors.length !== 1 ? 's' : ''} failed to import
+                  {t('moodle.failed_to_import', { count: batchErrors.length })}
                 </Text>
                 <Group gap="xs">
                   <Button
@@ -992,10 +1002,10 @@ export default function MoodleCoursesPage() {
                       setBatchItems([])
                     }}
                   >
-                    Retry failed
+                    {t('moodle.retry_failed')}
                   </Button>
                   <Button size="xs" variant="subtle" onClick={() => setBatchItems([])}>
-                    Dismiss
+                    {t('common.dismiss')}
                   </Button>
                 </Group>
               </Group>
@@ -1012,18 +1022,18 @@ export default function MoodleCoursesPage() {
           ) : (
             <Group justify="space-between">
               <Text size="sm" fw={500}>
-                {checkedIds.size} course{checkedIds.size !== 1 ? 's' : ''} selected
+                {t('moodle.n_selected', { count: checkedIds.size })}
               </Text>
               <Group gap="xs">
                 <Button size="xs" variant="subtle" onClick={toggleAll}>
-                  {checkedIds.size === courses.length ? 'Deselect all' : 'Select all'}
+                  {checkedIds.size === courses.length ? t('moodle.deselect_all') : t('moodle.select_all')}
                 </Button>
                 <Button
                   size="xs"
                   leftSection={<IconDatabaseImport size={14} />}
                   onClick={runBatchImport}
                 >
-                  Import selected to library
+                  {t('moodle.import_selected')}
                 </Button>
               </Group>
             </Group>
@@ -1032,8 +1042,8 @@ export default function MoodleCoursesPage() {
       )}
 
       {!loading && courses.length === 0 && (
-        <Alert color="orange" title="No courses found">
-          Check your Moodle token in Settings, or verify the connection.
+        <Alert color="orange" title={t('moodle.no_courses_title')}>
+          {t('moodle.no_courses_desc')}
         </Alert>
       )}
 
@@ -1063,7 +1073,7 @@ export default function MoodleCoursesPage() {
                   <ThemeIcon size="sm" variant="light" color="blue">
                     <IconCloud size={12} />
                   </ThemeIcon>
-                  <Tooltip label="View instance stats" position="right" withArrow>
+                  <Tooltip label={t('moodle.view_instance_stats')} position="right" withArrow>
                     <Text
                       fw={600} size="sm" c="blue"
                       style={{ flex: 1, cursor: 'pointer', textDecoration: 'underline dotted' }}
@@ -1113,7 +1123,7 @@ export default function MoodleCoursesPage() {
         <ScrollArea style={{ flex: 1, height: '100%' }}>
           {!selected && !loading && courses.length > 0 && (
             <Text size="sm" c="dimmed" mt="xl" ta="center">
-              Select a course on the left to view its structure.
+              {t('moodle.select_to_view')}
             </Text>
           )}
 
@@ -1131,15 +1141,15 @@ export default function MoodleCoursesPage() {
                   </div>
                   <Badge color={libVersions.length > 0 ? 'green' : 'gray'} variant="light">
                     {libVersions.length > 0
-                      ? `${libVersions.length} version${libVersions.length > 1 ? 's' : ''} in library`
-                      : 'Not in library'}
+                      ? t('moodle.in_library', { count: libVersions.length })
+                      : t('moodle.not_in_library')}
                   </Badge>
                 </Group>
 
                 <Divider my="xs" />
 
                 <Group gap="xs">
-                  <Tooltip label="Pull section structure from Moodle API and save as a new library version">
+                  <Tooltip label={t('moodle.tt_import_to_lib')}>
                     <Button
                       size="xs"
                       variant="light"
@@ -1148,11 +1158,11 @@ export default function MoodleCoursesPage() {
                       onClick={importToLibrary}
                       disabled={importing}
                     >
-                      {importing ? 'Importing…' : 'Import to Library'}
+                      {importing ? t('common.importing') : t('moodle.import_btn')}
                     </Button>
                   </Tooltip>
 
-                  <Tooltip label="Check Moodle's automated backup area for existing .mbz files">
+                  <Tooltip label={t('moodle.tt_check_backup')}>
                     <Button
                       size="xs"
                       variant="light"
@@ -1161,7 +1171,7 @@ export default function MoodleCoursesPage() {
                       onClick={checkBackups}
                       disabled={checkingBackup}
                     >
-                      {checkingBackup ? 'Checking…' : 'Check for Backup'}
+                      {checkingBackup ? t('common.checking') : t('moodle.check_backup')}
                     </Button>
                   </Tooltip>
                 </Group>
@@ -1169,7 +1179,7 @@ export default function MoodleCoursesPage() {
                 {/* Backup files list */}
                 {backupFiles !== null && backupFiles.length > 0 && (
                   <Stack gap={4} mt="sm">
-                    <Text size="xs" fw={500} c="violet">Backup files found:</Text>
+                    <Text size="xs" fw={500} c="violet">{t('moodle.backup_files')}</Text>
                     {backupFiles.map(f => (
                       <Group key={f.filename} gap="xs" justify="space-between" wrap="nowrap">
                         <Text size="xs" style={{ flex: 1 }} lineClamp={1}>{f.filename}</Text>
@@ -1178,7 +1188,7 @@ export default function MoodleCoursesPage() {
                           <Text size="xs" c="dimmed">
                             {f.modified ? new Date(f.modified * 1000).toLocaleDateString() : ''}
                           </Text>
-                          <Tooltip label="Download .mbz">
+                          <Tooltip label={t('moodle.tt_download_mbz')}>
                             <ActionIcon
                               size="xs" color="green" variant="light"
                               component="a" href={f.download_url} download={f.filename}
@@ -1186,7 +1196,7 @@ export default function MoodleCoursesPage() {
                               <IconDownload size={12} />
                             </ActionIcon>
                           </Tooltip>
-                          <Tooltip label="Parse this .mbz and save as a library version">
+                          <Tooltip label={t('moodle.tt_parse_mbz')}>
                             <ActionIcon
                               size="xs" color="blue" variant="light"
                               loading={addingBackup === f.filename}
@@ -1202,7 +1212,7 @@ export default function MoodleCoursesPage() {
                 )}
 
                 {backupFiles !== null && backupFiles.length === 0 && (
-                  <Text size="xs" c="dimmed" mt="xs">No automated backup files found in this course.</Text>
+                  <Text size="xs" c="dimmed" mt="xs">{t('moodle.no_backup')}</Text>
                 )}
               </Paper>
 
@@ -1212,9 +1222,9 @@ export default function MoodleCoursesPage() {
                 value={viewMode}
                 onChange={v => setViewMode(v as 'structure' | 'grades' | 'analytics')}
                 data={[
-                  { value: 'structure', label: 'Structure' },
-                  { value: 'grades',    label: <Group gap={4}><IconReportAnalytics size={13} />Grades</Group> },
-                  { value: 'analytics', label: <Group gap={4}><IconChartBar size={13} />Analytics</Group> },
+                  { value: 'structure', label: t('moodle.view_structure') },
+                  { value: 'grades',    label: <Group gap={4}><IconReportAnalytics size={13} />{t('moodle.view_grades')}</Group> },
+                  { value: 'analytics', label: <Group gap={4}><IconChartBar size={13} />{t('moodle.view_analytics')}</Group> },
                 ]}
               />
 
@@ -1223,8 +1233,8 @@ export default function MoodleCoursesPage() {
                 <>
                   <Alert color="blue" icon={<IconCloud size={14} />} py="xs">
                     <Group gap="xs">
-                      {capBadge(true)} can be updated via API &nbsp;·&nbsp;
-                      {capBadge(false)} requires .mbz restore
+                      {capBadge(true)} {t('moodle.api_note')} &nbsp;·&nbsp;
+                      {capBadge(false)} {t('moodle.mbz_note')}
                     </Group>
                   </Alert>
                   {loadingSec && <Loader />}

@@ -1,11 +1,12 @@
 import { useEffect, useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Stack, Title, TextInput, Textarea, Button, Group,
   Paper, Text, Badge, Table, Loader, Stepper, Box,
   Select, NumberInput, Progress, ThemeIcon,
   SimpleGrid, Collapse, Autocomplete, ActionIcon,
   SegmentedControl, ScrollArea, NavLink,
-  RingProgress, Center, Modal, Divider, Anchor,
+  RingProgress, Center, Modal, Divider, Anchor, Alert,
 } from '@mantine/core'
 import { DatePickerInput } from '@mantine/dates'
 import '@mantine/dates/styles.css'
@@ -53,20 +54,23 @@ interface Props {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function relativeTime(iso: string): string {
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+function relativeTime(iso: string, t: TFn): string {
   const diff = Date.now() - new Date(iso).getTime()
   const mins  = Math.floor(diff / 60_000)
   const hours = Math.floor(diff / 3_600_000)
   const days  = Math.floor(diff / 86_400_000)
-  if (mins  < 1)   return 'just now'
-  if (mins  < 60)  return `${mins}m ago`
-  if (hours < 24)  return `${hours}h ago`
-  return `${days}d ago`
+  if (mins  < 1)   return t('common.just_now')
+  if (mins  < 60)  return t('common.ago_mins',  { count: mins })
+  if (hours < 24)  return t('common.ago_hours', { count: hours })
+  return t('common.ago_days', { count: days })
 }
 
 // ── Review panel ──────────────────────────────────────────────────────────────
 
 function ReviewPanel() {
+  const { t } = useTranslation()
   const [libCourses, setLibCourses]   = useState<Course[]>([])
   const [pickedCat,  setPickedCat]    = useState<string | null>(null)
   const [pickedSn,   setPickedSn]     = useState<string | null>(null)
@@ -78,7 +82,7 @@ function ReviewPanel() {
   const [forking,    setForking]      = useState(false)
   const [deployOpen,   setDeployOpen]   = useState(false)
   const [deploying,    setDeploying]    = useState(false)
-  const [deployResult, setDeployResult] = useState<{ moodle_course_id: number; url: string; sections_pushed: number } | null>(null)
+  const [deployResult, setDeployResult] = useState<{ moodle_course_id: number; url: string; sections_pushed: number; forums_seeded: number; mbz_url: string | null; restore_url: string } | null>(null)
   const [moodleCats,   setMoodleCats]   = useState<{ id: number; name: string }[]>([])
   const [deployCatId,  setDeployCatId]  = useState<string | null>(null)
   const [deployStart,  setDeployStart]  = useState('')
@@ -147,9 +151,9 @@ function ReviewPanel() {
       const updated = await api.courses.versions(pickedSn)
       setVersions(updated)
       setSelVid(String(newVer.id))
-      notifications.show({ title: 'Saved as new version', message: `v${newVer.version_num} created for ${pickedSn}`, color: 'green' })
+      notifications.show({ title: t('nc.rev_fork_done'), message: t('nc.rev_fork_msg', { n: newVer.version_num, sn: pickedSn }), color: 'green' })
     } catch (e: any) {
-      notifications.show({ title: 'Save failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('nc.rev_fork_fail'), message: e.message, color: 'red' })
     } finally {
       setForking(false)
     }
@@ -178,7 +182,7 @@ function ReviewPanel() {
       })
       setDeployResult(res)
     } catch (e: any) {
-      notifications.show({ title: 'Deploy failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('nc.rev_deploy_fail'), message: e.message, color: 'red' })
     } finally {
       setDeploying(false)
     }
@@ -191,13 +195,13 @@ function ReviewPanel() {
       <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-violet-5)' }}>
         <Group gap="xs" mb="xs">
           <ThemeIcon size="sm" color="violet" variant="light"><IconCategory size={14} /></ThemeIcon>
-          <Text size="sm" fw={600} c="violet">Step 1 · Category</Text>
+          <Text size="sm" fw={600} c="violet">{t('nc.rev_step_category')}</Text>
           {pickedCat && (
-            <Text size="xs" c="dimmed">— {coursesInCat.length} course{coursesInCat.length !== 1 ? 's' : ''}</Text>
+            <Text size="xs" c="dimmed">{t('nc.rev_n_courses', { count: coursesInCat.length })}</Text>
           )}
         </Group>
         <Select
-          placeholder="Choose a category…"
+          placeholder={t('nc.rev_cat_placeholder')}
           data={categoryOptions}
           value={pickedCat}
           onChange={v => { setPickedCat(v); setPickedSn(null) }}
@@ -212,7 +216,7 @@ function ReviewPanel() {
         <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-blue-5)' }}>
           <Group gap="xs" mb="sm">
             <ThemeIcon size="sm" color="blue" variant="light"><IconBook2 size={14} /></ThemeIcon>
-            <Text size="sm" fw={600} c="blue">Step 2 · Course</Text>
+            <Text size="sm" fw={600} c="blue">{t('nc.rev_step_course')}</Text>
           </Group>
           <ScrollArea h={220} type="auto" offsetScrollbars>
             <Stack gap={2}>
@@ -265,23 +269,23 @@ function ReviewPanel() {
                   onClick={handleFork}
                   disabled={forking}
                 >
-                  {forking ? 'Saving…' : `Fork → v${(selectedVersion?.version_num ?? 0) + 1}`}
+                  {forking ? t('nc.rev_saving') : t('nc.rev_fork_btn', { n: (selectedVersion?.version_num ?? 0) + 1 })}
                 </Button>
                 <Button
                   size="xs" variant="light" color="blue"
                   leftSection={<IconCloudUpload size={12} />}
                   onClick={openDeploy}
                 >
-                  Deploy to Moodle
+                  {t('nc.rev_deploy_btn')}
                 </Button>
               </Group>
             )}
           </Group>
           {loadingV
-            ? <Group gap="xs"><Loader size="xs" /><Text size="xs" c="dimmed">Loading versions…</Text></Group>
+            ? <Group gap="xs"><Loader size="xs" /><Text size="xs" c="dimmed">{t('nc.rev_loading_versions')}</Text></Group>
             : versions.length > 0
-              ? <Select label="Version" data={versionOptions} value={selVid} onChange={setSelVid} size="sm" />
-              : <Text size="xs" c="dimmed">No versions found.</Text>
+              ? <Select label={t('nc.rev_version')} data={versionOptions} value={selVid} onChange={setSelVid} size="sm" />
+              : <Text size="xs" c="dimmed">{t('nc.rev_no_versions')}</Text>
           }
         </Paper>
       )}
@@ -289,7 +293,7 @@ function ReviewPanel() {
       {loadingC && (
         <Stack align="center" py="xl">
           <Loader />
-          <Text size="sm" c="dimmed">Loading content…</Text>
+          <Text size="sm" c="dimmed">{t('nc.rev_loading_content')}</Text>
         </Stack>
       )}
 
@@ -322,7 +326,7 @@ function ReviewPanel() {
 
       {!pickedCat && !pickedSn && (
         <Text size="sm" c="dimmed" ta="center" py="xl">
-          Choose a category above to browse your course library.
+          {t('nc.rev_hint')}
         </Text>
       )}
 
@@ -333,7 +337,7 @@ function ReviewPanel() {
         title={
           <Group gap="xs">
             <IconCloudUpload size={16} />
-            <Text fw={600} size="sm">Deploy to Moodle — {selectedCourse?.fullname ?? pickedSn}</Text>
+            <Text fw={600} size="sm">{t('nc.deploy_title', { fullname: selectedCourse?.fullname ?? pickedSn })}</Text>
           </Group>
         }
         size="md"
@@ -341,51 +345,85 @@ function ReviewPanel() {
         {deployResult ? (
           <Stack gap="sm">
             <Text size="sm" c="green" fw={500}>
-              Course pushed — {deployResult.sections_pushed} sections created.
+              {t('nc.rev_deploy_success', { sections: deployResult.sections_pushed, forums: deployResult.forums_seeded })}
             </Text>
-            <Text size="sm">Moodle course ID: <strong>{deployResult.moodle_course_id}</strong></Text>
+            <Text size="sm">{t('nc.rev_moodle_id')} <strong>{deployResult.moodle_course_id}</strong></Text>
             <Anchor href={deployResult.url} target="_blank" size="sm">
-              <Group gap={4}><IconExternalLink size={14} />Open in Moodle</Group>
+              <Group gap={4}><IconExternalLink size={14} />{t('cv.open_moodle')}</Group>
             </Anchor>
+
+            <Alert color="blue" title={t('nc.full_restore')} variant="light">
+              <Text size="xs" c="dimmed" mb="xs">
+                {t('nc.full_restore_desc')}
+              </Text>
+              <Group gap="xs">
+                {deployResult.mbz_url && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    component="a"
+                    href={deployResult.mbz_url}
+                    leftSection={<IconCloudUpload size={12} />}
+                  >
+                    {t('nc.download_mbz')}
+                  </Button>
+                )}
+                <Button
+                  size="xs"
+                  variant="outline"
+                  color="gray"
+                  component="a"
+                  href={deployResult.restore_url}
+                  target="_blank"
+                  leftSection={<IconExternalLink size={12} />}
+                >
+                  {t('nc.open_restore')}
+                </Button>
+              </Group>
+              <Text size="xs" c="dimmed" mt="xs">
+                {t('nc.restore_note')}
+              </Text>
+            </Alert>
+
             <Group justify="flex-end">
-              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Close</Button>
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>{t('nc.rev_close')}</Button>
             </Group>
           </Stack>
         ) : (
           <Stack gap="sm">
             <Select
-              label="Moodle Category"
-              placeholder="Select destination category…"
+              label={t('nc.rev_deploy_cat')}
+              placeholder={t('nc.rev_deploy_cat_ph')}
               data={moodleCats.map(c => ({ value: String(c.id), label: c.name }))}
               value={deployCatId}
               onChange={setDeployCatId}
               searchable
               required
             />
-            <Divider label="Dates (optional)" labelPosition="left" />
+            <Divider label={t('nc.rev_dates_optional')} labelPosition="left" />
             <Group grow>
               <TextInput
-                label="Start date"
+                label={t('nc.start_date')}
                 type="date"
                 value={deployStart}
                 onChange={e => setDeployStart(e.currentTarget.value)}
               />
               <TextInput
-                label="End date"
+                label={t('nc.end_date')}
                 type="date"
                 value={deployEnd}
                 onChange={e => setDeployEnd(e.currentTarget.value)}
               />
             </Group>
             <Group justify="flex-end" gap="xs">
-              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Cancel</Button>
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>{t('common.cancel')}</Button>
               <Button
                 color="blue"
                 leftSection={deploying ? <Loader size="xs" /> : <IconCloudUpload size={14} />}
                 onClick={handleDeploy}
                 disabled={!deployCatId || deploying}
               >
-                {deploying ? 'Deploying…' : 'Deploy'}
+                {deploying ? t('common.deploying') : t('lib.deploy_btn')}
               </Button>
             </Group>
           </Stack>
@@ -399,6 +437,7 @@ function ReviewPanel() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CourseStudioPage({ onCreated, onGeneratingChange }: Props) {
+  const { t } = useTranslation()
   const [mode, setMode]               = useState<'new' | 'review'>('new')
   const [provider, setProvider]       = useState<string>('local')
   const [modelOpen, setModelOpen]     = useState(false)
@@ -476,9 +515,9 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
       const cache = await api.llm.evaluate()
       setModels(cache.results); setEvaluatedAt(cache.evaluated_at)
       if (cache.results.length) setModel(cache.results[0].id)
-      notifications.show({ title: 'Evaluation done', message: `Best: ${cache.results[0]?.id}`, color: 'green' })
+      notifications.show({ title: t('nc.notif_eval_done'), message: t('nc.notif_eval_best', { id: cache.results[0]?.id }), color: 'green' })
     } catch (e: any) {
-      notifications.show({ title: 'Evaluation failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('nc.notif_eval_fail'), message: e.message, color: 'red' })
     } finally { setEvaluating(false) }
   }
 
@@ -491,7 +530,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
 
   const generate = form.onSubmit(async values => {
     if (!selectedModel) {
-      notifications.show({ title: 'No model', message: 'Select a model first.', color: 'orange' })
+      notifications.show({ title: t('nc.notif_no_model'), message: t('nc.notif_no_model_desc'), color: 'orange' })
       return
     }
     setGenerating(true)
@@ -513,10 +552,10 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
       clearInterval(timer)
       setGenStep(totalSteps)
       onGeneratingChange?.(false)
-      notifications.show({ title: 'Course created!', message: values.shortname, color: 'green', icon: <IconCheck /> })
+      notifications.show({ title: t('nc.notif_created'), message: values.shortname, color: 'green', icon: <IconCheck /> })
       onCreated()
     } catch (e: any) {
-      notifications.show({ title: 'Generation failed', message: e.message, color: 'red', icon: <IconX /> })
+      notifications.show({ title: t('nc.notif_gen_fail'), message: e.message, color: 'red', icon: <IconX /> })
       setGenerating(false)
       onGeneratingChange?.(false)
       setGenStep(0)
@@ -526,13 +565,13 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
   return (
     <Stack maw={800}>
       <Group justify="space-between" align="center">
-        <Title order={3}>Course Studio</Title>
+        <Title order={3}>{t('nc.title')}</Title>
         <SegmentedControl
           value={mode}
           onChange={v => setMode(v as 'new' | 'review')}
           data={[
-            { value: 'new',    label: <Group gap={6} wrap="nowrap"><IconPlus size={14} /><span>New Course</span></Group> },
-            { value: 'review', label: <Group gap={6} wrap="nowrap"><IconEye size={14} /><span>Review</span></Group> },
+            { value: 'new',    label: <Group gap={6} wrap="nowrap"><IconPlus size={14} /><span>{t('nc.new_course')}</span></Group> },
+            { value: 'review', label: <Group gap={6} wrap="nowrap"><IconEye size={14} /><span>{t('nc.review')}</span></Group> },
           ]}
         />
       </Group>
@@ -556,9 +595,9 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 <Group justify="space-between" align="center" mb="sm">
                   <Group gap="xs">
                     <ThemeIcon size="sm" color={accentColor} variant="light"><IconLayoutGrid size={14} /></ThemeIcon>
-                    <Text size="sm" fw={600} c={accentColor}>1 · Language Model</Text>
+                    <Text size="sm" fw={600} c={accentColor}>{t('nc.lm_label')}</Text>
                     {isCloud && <Badge size="xs" color={meta.color} variant="light">{meta.label}</Badge>}
-                    {!isCloud && evaluatedAt && <Text size="xs" c="dimmed">evaluated {relativeTime(evaluatedAt)}</Text>}
+                    {!isCloud && evaluatedAt && <Text size="xs" c="dimmed">{t('nc.lm_evaluated', { time: relativeTime(evaluatedAt, t as TFn) })}</Text>}
                   </Group>
                   {!isCloud && (
                     <Button
@@ -567,7 +606,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                       onClick={runEvaluation}
                       disabled={evaluating}
                     >
-                      {evaluating ? 'Evaluating…' : evaluatedAt ? 'Re-evaluate' : 'Evaluate Models'}
+                      {evaluating ? t('nc.lm_evaluating') : evaluatedAt ? t('nc.lm_re_evaluate') : t('nc.lm_evaluate')}
                     </Button>
                   )}
                 </Group>
@@ -576,15 +615,15 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 {isCloud && (
                   <Stack gap="xs">
                     <Autocomplete
-                      label="Model ID"
-                      description="Choose a suggested model or type any model ID your provider supports"
+                      label={t('nc.lm_model_id')}
+                      description={t('nc.lm_model_id_desc')}
                       placeholder={PROVIDER_MODELS[provider][0]}
                       data={PROVIDER_MODELS[provider]}
                       value={selectedModel}
                       onChange={setModel}
                     />
                     <Text size="xs" c="dimmed">
-                      Billed per token by <strong>{meta.label}</strong> · Change provider in Settings
+                      {t('nc.lm_cloud_billed', { provider: meta.label })}
                     </Text>
                   </Stack>
                 )}
@@ -595,7 +634,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                     {evaluating && (
                       <Stack align="center" py="sm">
                         <Loader size="sm" />
-                        <Text size="xs" c="dimmed">Running benchmarks on all models…</Text>
+                        <Text size="xs" c="dimmed">{t('nc.lm_running')}</Text>
                       </Stack>
                     )}
 
@@ -639,7 +678,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                             {selectedModel === m.id && (
                               <Group justify="center" mt="xs" gap={4}>
                                 <ThemeIcon size="xs" color="blue"><IconCheck size={10} /></ThemeIcon>
-                                <Text size="xs" c="blue" fw={600}>Selected</Text>
+                                <Text size="xs" c="blue" fw={600}>{t('nc.lm_selected')}</Text>
                               </Group>
                             )}
                           </Paper>
@@ -649,7 +688,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
 
                     {!evaluating && models.length === 0 && (
                       <Text size="sm" c="dimmed" ta="center" py="sm">
-                        No models found — click <strong>Evaluate Models</strong> to discover and rank available models.
+                        {t('nc.lm_no_models')}
                       </Text>
                     )}
 
@@ -660,18 +699,18 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                           rightSection={modelOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                           onClick={() => setModelOpen(o => !o)}
                         >
-                          {modelOpen ? 'Hide full list' : `Show all ${models.length} models`}
+                          {modelOpen ? t('nc.lm_hide') : t('nc.lm_show_all', { count: models.length })}
                         </Button>
                         <Collapse in={modelOpen}>
                           <Table striped highlightOnHover withTableBorder mt="xs">
                             <Table.Thead>
                               <Table.Tr>
                                 <Table.Th></Table.Th>
-                                <Table.Th>Model</Table.Th>
-                                <Table.Th>Size</Table.Th>
-                                <Table.Th>Quant</Table.Th>
-                                {models[0]?.final_score !== undefined && <Table.Th>Score</Table.Th>}
-                                {models[0]?.elapsed_s   !== undefined && <Table.Th>Speed</Table.Th>}
+                                <Table.Th>{t('nc.lm_th_model')}</Table.Th>
+                                <Table.Th>{t('nc.lm_th_size')}</Table.Th>
+                                <Table.Th>{t('nc.lm_th_quant')}</Table.Th>
+                                {models[0]?.final_score !== undefined && <Table.Th>{t('nc.lm_th_score')}</Table.Th>}
+                                {models[0]?.elapsed_s   !== undefined && <Table.Th>{t('nc.lm_th_speed')}</Table.Th>}
                               </Table.Tr>
                             </Table.Thead>
                             <Table.Tbody>
@@ -716,31 +755,31 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 style={{ borderLeft: '3px solid var(--mantine-color-teal-5)' }}>
                 <Group gap="xs" mb="sm">
                   <ThemeIcon size="sm" color="teal" variant="light"><IconBook2 size={14} /></ThemeIcon>
-                  <Text size="sm" fw={600} c="teal">2 · Course Identity</Text>
+                  <Text size="sm" fw={600} c="teal">{t('nc.form_identity')}</Text>
                 </Group>
                 <Stack gap="sm">
                   <Group grow>
-                    <TextInput label="Short name" placeholder="e.g. TH310-2026" {...form.getInputProps('shortname')} />
-                    <TextInput label="Full name"  placeholder="Full course name"  {...form.getInputProps('fullname')} />
+                    <TextInput label={t('nc.form_shortname')} placeholder={t('nc.form_shortname_ph')} {...form.getInputProps('shortname')} />
+                    <TextInput label={t('nc.form_fullname')}  placeholder={t('nc.form_fullname_ph')}  {...form.getInputProps('fullname')} />
                   </Group>
                   <Group grow>
-                    <TextInput label="Professor" placeholder="Instructor name" {...form.getInputProps('professor')} />
+                    <TextInput label={t('nc.professor')} placeholder={t('nc.form_professor_ph')} {...form.getInputProps('professor')} />
                     <Autocomplete
-                      label="Category"
-                      placeholder="Course category"
+                      label={t('nc.category')}
+                      placeholder={t('nc.form_category_ph')}
                       data={categories}
                       {...form.getInputProps('category')}
                     />
                   </Group>
                   <Group grow>
                     <DatePickerInput
-                      label="Start date" placeholder="Pick a date"
+                      label={t('nc.start_date')} placeholder={t('nc.pick_date')}
                       leftSection={<IconCalendar size={14} />}
                       valueFormat="YYYY-MM-DD" clearable
                       {...form.getInputProps('start_date')}
                     />
                     <DatePickerInput
-                      label="End date" placeholder="Pick a date"
+                      label={t('nc.end_date')} placeholder={t('nc.pick_date')}
                       leftSection={<IconCalendar size={14} />}
                       valueFormat="YYYY-MM-DD" clearable
                       {...form.getInputProps('end_date')}
@@ -748,20 +787,20 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                   </Group>
                   <Group grow>
                     <NumberInput
-                      label="Modules"
-                      description="Number of course modules (3–12)"
+                      label={t('nc.form_modules')}
+                      description={t('nc.form_modules_desc')}
                       min={3} max={12} step={1}
                       {...form.getInputProps('module_count')}
                     />
                     <Select
-                      label="Language"
-                      description="Content generation language"
+                      label={t('nc.form_language')}
+                      description={t('nc.form_language_desc')}
                       data={[
-                        { value: 'es', label: 'Spanish (Español)' },
-                        { value: 'en', label: 'English' },
-                        { value: 'pt', label: 'Portuguese (Português)' },
-                        { value: 'fr', label: 'French (Français)' },
-                        { value: 'de', label: 'German (Deutsch)' },
+                        { value: 'es', label: t('nc.lang_es') },
+                        { value: 'en', label: t('nc.lang_en') },
+                        { value: 'pt', label: t('nc.lang_pt') },
+                        { value: 'fr', label: t('nc.lang_fr') },
+                        { value: 'de', label: t('nc.lang_de') },
                       ]}
                       {...form.getInputProps('language')}
                     />
@@ -774,20 +813,20 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 style={{ borderLeft: '3px solid var(--mantine-color-orange-5)' }}>
                 <Group gap="xs" mb="sm">
                   <ThemeIcon size="sm" color="orange" variant="light"><IconClipboardList size={14} /></ThemeIcon>
-                  <Text size="sm" fw={600} c="orange">3 · Assessment</Text>
+                  <Text size="sm" fw={600} c="orange">{t('nc.form_assessment')}</Text>
                 </Group>
                 <Stack gap="sm">
                   <NumberInput
-                    label="Quiz questions"
-                    description="Total questions generated for the final test (30–50 recommended)"
+                    label={t('nc.form_quiz')}
+                    description={t('nc.form_quiz_desc')}
                     min={10} max={100} step={5}
                     {...form.getInputProps('num_questions')}
                   />
 
                   {/* Homework pill toggles */}
                   <div>
-                    <Text size="sm" fw={500} mb={4}>Homework Modules <Text span size="xs" c="dimmed">(optional)</Text></Text>
-                    <Text size="xs" c="dimmed" mb="sm">Click a module to include extra homework, then pick the activity type.</Text>
+                    <Text size="sm" fw={500} mb={4}>{t('nc.form_hw')} <Text span size="xs" c="dimmed">{t('nc.form_hw_opt')}</Text></Text>
+                    <Text size="xs" c="dimmed" mb="sm">{t('nc.form_hw_desc')}</Text>
                     <Group gap="sm" mb="xs" wrap="wrap">
                       {Array.from({ length: form.values.module_count }, (_, i) => i + 1).map(n => (
                         <Paper
@@ -806,7 +845,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                         >
                           <Text size="xs" fw={hwSpec[n] != null ? 700 : 400}
                                 c={hwSpec[n] != null ? 'orange' : 'dimmed'}>
-                            Mod {n}
+                            {t('nc.mod_n', { n })}
                           </Text>
                         </Paper>
                       ))}
@@ -819,7 +858,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                             key={n} size="xs" label={`Mod ${n}`}
                             value={hwSpec[n]}
                             onChange={v => setHwSpec(prev => ({ ...prev, [n]: v }))}
-                            data={[{ value: 'assign', label: 'Assignment' }, { value: 'forum', label: 'Forum' }]}
+                            data={[{ value: 'assign', label: t('cv.assignment') }, { value: 'forum', label: t('cv.forum') }]}
                           />
                         ))}
                       </SimpleGrid>
@@ -833,11 +872,11 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 style={{ borderLeft: '3px solid var(--mantine-color-blue-5)' }}>
                 <Group gap="xs" mb="sm">
                   <ThemeIcon size="sm" color="blue" variant="light"><IconSparkles size={14} /></ThemeIcon>
-                  <Text size="sm" fw={600} c="blue">4 · Course Prompt</Text>
+                  <Text size="sm" fw={600} c="blue">{t('nc.form_prompt_label')}</Text>
                 </Group>
                 <Textarea
-                  placeholder="Describe the course: subject, audience, theological framework, key themes, learning outcomes, tone…"
-                  description="The richer and more specific your prompt, the better the generated content."
+                  placeholder={t('nc.form_prompt_ph')}
+                  description={t('nc.form_prompt_desc')}
                   minRows={6} autosize
                   {...form.getInputProps('prompt')}
                 />
@@ -850,16 +889,16 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                   <Group gap="xs" mb="sm">
                     <Loader size="xs" color="violet" />
                     <Text size="sm" fw={600} c="violet">
-                      Generating — step {genStep} of {totalSteps}
+                      {t('nc.gen_progress', { step: genStep, total: totalSteps })}
                     </Text>
                   </Group>
                   <Stack gap={3}>
                     {[
-                      { step: 1, label: 'Course structure — 5 modules & objectives' },
-                      { step: 2, label: 'Module content — lectures, glossary & discussions' },
-                      { step: 3, label: 'Syllabus — prontuario & learning outcomes' },
-                      { step: 4, label: `Quiz — ${form.values.num_questions} questions` },
-                      ...(hasHomework ? [{ step: 5, label: 'Homework — assignments & forums' }] : []),
+                      { step: 1, label: t('nc.step_structure', { count: form.values.module_count }) },
+                      { step: 2, label: t('nc.gen_step_content') },
+                      { step: 3, label: t('nc.gen_step_syllabus') },
+                      { step: 4, label: t('nc.gen_step_quiz', { count: form.values.num_questions }) },
+                      ...(hasHomework ? [{ step: 5, label: t('nc.gen_step_hw') }] : []),
                     ].map(({ step, label }) => {
                       const status = genStep > step ? 'done' : genStep === step ? 'running' : 'pending'
                       return (
@@ -887,7 +926,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                     })}
                   </Stack>
                   <Text size="xs" c="dimmed" ta="center" mt="sm">
-                    This takes 5–15 minutes depending on model and course length.
+                    {t('nc.gen_eta')}
                   </Text>
                 </Paper>
               )}
@@ -902,7 +941,7 @@ export default function CourseStudioPage({ onCreated, onGeneratingChange }: Prop
                 size="lg"
                 fullWidth
               >
-                {generating ? 'Generating Course…' : 'Generate Course'}
+                {generating ? t('nc.generating_course') : t('nc.generate_btn')}
               </Button>
 
             </Stack>

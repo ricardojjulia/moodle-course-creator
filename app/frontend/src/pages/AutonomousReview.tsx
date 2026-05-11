@@ -1,20 +1,21 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import {
   Stack, Title, Text, Button, Group, Paper, Switch,
   Textarea, Badge, Loader, ScrollArea,
   SimpleGrid, ThemeIcon, Autocomplete, Select,
-  Collapse, Box, MultiSelect, Divider, ActionIcon, Table,
+  Collapse, Box, MultiSelect, Divider, ActionIcon, Table, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import {
   IconShieldCheck, IconChevronDown, IconChevronRight,
   IconSparkles, IconSchool, IconWand,
-  IconCheck, IconX, IconCircle, IconTrash, IconHistory,
+  IconCheck, IconX, IconCircle, IconTrash, IconHistory, IconFolderOpen, IconReload,
 } from '@tabler/icons-react'
 import {
   api, type Course, type CourseReviewResult, type CourseVersion,
   type LlmModel, type PersistedReview,
 } from '../api/client'
+import { useTranslation } from 'react-i18next'
 
 // ── Agent defaults ────────────────────────────────────────────────────────────
 
@@ -186,6 +187,7 @@ function AgentCard({
   config: AgentConfig
   onChange: (patch: Partial<AgentConfig>) => void
 }) {
+  const { t } = useTranslation()
   const [editOpen, setEditOpen] = useState(false)
   const Icon = config.id === 'reviewer' ? IconShieldCheck : IconSchool
 
@@ -221,14 +223,14 @@ function AgentCard({
           onClick={() => setEditOpen(o => !o)}
           color={config.color}
         >
-          {editOpen ? 'Hide prompt' : 'Edit prompt'}
+          {editOpen ? t('rev.hide_prompt') : t('rev.edit_prompt')}
         </Button>
         {editOpen && (
           <Button
             size="xs" variant="subtle" color="gray"
             onClick={() => onChange({ prompt: config._default })}
           >
-            Reset
+            {t('rev.reset')}
           </Button>
         )}
       </Group>
@@ -250,6 +252,7 @@ function AgentCard({
 // ── Result card ───────────────────────────────────────────────────────────────
 
 function ResultCard({ result }: { result: ReviewRun }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
   const allItems    = result.sections?.flatMap(s => s.items) ?? []
@@ -291,7 +294,7 @@ function ResultCard({ result }: { result: ReviewRun }) {
           <Text size="xs" c="dimmed" mb="sm">{result.summary}</Text>
 
           <Group gap="xs" mb="xs">
-            <Text size="xs" c="dimmed">{passedCount}/{allItems.length} checks passed</Text>
+            <Text size="xs" c="dimmed">{t('rev.checks_passed', { passed: passedCount, total: allItems.length })}</Text>
           </Group>
 
           <Button
@@ -299,7 +302,7 @@ function ResultCard({ result }: { result: ReviewRun }) {
             rightSection={open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
             onClick={() => setOpen(o => !o)}
           >
-            {open ? 'Hide audit detail' : 'View audit detail'}
+            {open ? t('rev.hide_audit') : t('rev.view_audit')}
           </Button>
 
           <Collapse in={open}>
@@ -368,7 +371,9 @@ const INITIAL_AGENTS: AgentConfig[] = [
   },
 ]
 
-export default function AutonomousReviewPage() {
+export default function AutonomousReviewPage({ onLoadCourse }: { onLoadCourse?: (shortname: string) => void } = {}) {
+  const { t } = useTranslation()
+  const topRef = useRef<HTMLDivElement>(null)
   const [courses,          setCourses]          = useState<Course[]>([])
   const [agents,           setAgents]           = useState<AgentConfig[]>(INITIAL_AGENTS)
   const [filterCat,        setFilterCat]        = useState<string | null>(null)
@@ -394,7 +399,6 @@ export default function AutonomousReviewPage() {
     loadHistory()
     api.courses.list().then(cs => {
       setCourses(cs)
-      setSelectedSns(cs.map(c => c.shortname))
     }).catch(() => {})
 
     api.llm.evaluationCache().then(cache => {
@@ -466,7 +470,7 @@ export default function AutonomousReviewPage() {
 
     const instructions = buildInstructions(validResults)
     if (!instructions) {
-      notifications.show({ title: 'Nothing to improve', message: 'All checks passed!', color: 'green' })
+      notifications.show({ title: t('rev.notif_nothing'), message: t('rev.notif_all_passed'), color: 'green' })
       return
     }
 
@@ -518,15 +522,15 @@ export default function AutonomousReviewPage() {
 
       setRegenDone(prev => ({ ...prev, [shortname]: finalVer }))
       notifications.show({
-        title:   'Regeneration complete',
-        message: `${shortname} → v${finalVer.version_num} saved to Library`,
+        title:   t('rev.notif_regen_done'),
+        message: t('rev.notif_regen_msg', { shortname, n: finalVer.version_num }),
         color:   'green',
         icon:    <IconWand size={16} />,
       })
     } catch (e: any) {
       notifications.show({
-        title:   'Regeneration failed',
-        message: e.message ?? 'Unknown error',
+        title:   t('rev.notif_regen_failed'),
+        message: e.message ?? t('common.error'),
         color:   'red',
       })
     } finally {
@@ -539,7 +543,7 @@ export default function AutonomousReviewPage() {
 
   const startReview = async () => {
     if (enabledAgents.length === 0) {
-      notifications.show({ title: 'No agents enabled', message: 'Enable at least one review agent.', color: 'orange' })
+      notifications.show({ title: t('rev.notif_no_agents'), message: t('rev.notif_no_agents_msg'), color: 'orange' })
       return
     }
     setResults([])
@@ -598,8 +602,8 @@ export default function AutonomousReviewPage() {
     setRunning(false)
     loadHistory()
     notifications.show({
-      title:   'Review complete',
-      message: `${completed} run${completed !== 1 ? 's' : ''} across ${toReview.length} course${toReview.length !== 1 ? 's' : ''}`,
+      title:   t('rev.notif_complete'),
+      message: t('rev.notif_complete_msg', { count: completed, s: completed !== 1 ? 's' : '', courses: toReview.length, cs: toReview.length !== 1 ? 's' : '' }),
       color:   'green',
       icon:    <IconShieldCheck size={16} />,
     })
@@ -612,24 +616,30 @@ export default function AutonomousReviewPage() {
     ? Math.round(results.filter(r => !r.error).reduce((s, r) => s + (r.score ?? 0), 0) / (results.length - incomplete || 1))
     : null
 
+  const jumpToReview = (shortname: string) => {
+    setSelectedSns([shortname])
+    setFilterCat(null)
+    topRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   return (
-    <Stack gap="md" maw={1000}>
+    <Stack gap="md" maw={1000} ref={topRef}>
 
       {/* Page header */}
       <Group justify="space-between" align="center">
         <Group gap="xs">
           <ThemeIcon size="md" color="violet" variant="light"><IconShieldCheck size={18} /></ThemeIcon>
           <div>
-            <Title order={3}>Autonomous Review</Title>
-            <Text size="xs" c="dimmed">Bulk LLM audit of library courses against configured review agents</Text>
+            <Title order={3}>{t('rev.title')}</Title>
+            <Text size="xs" c="dimmed">{t('rev.subtitle')}</Text>
           </div>
         </Group>
         {results.length > 0 && !running && (
           <Group gap="xs">
-            <Badge color="green"  variant="light">{passed} Passed</Badge>
-            <Badge color="orange" variant="light">{needsRev} Need Revision</Badge>
-            {incomplete > 0 && <Badge color="red" variant="light">{incomplete} Errors</Badge>}
-            {avgScore !== null && <Badge color={scoreColor(avgScore)} variant="filled">Avg {avgScore}/100</Badge>}
+            <Badge color="green"  variant="light">{t('rev.passed', { count: passed })}</Badge>
+            <Badge color="orange" variant="light">{t('rev.need_revision', { count: needsRev })}</Badge>
+            {incomplete > 0 && <Badge color="red" variant="light">{t('rev.errors', { count: incomplete })}</Badge>}
+            {avgScore !== null && <Badge color={scoreColor(avgScore)} variant="filled">{t('rev.avg_score', { score: avgScore })}</Badge>}
           </Group>
         )}
       </Group>
@@ -642,7 +652,7 @@ export default function AutonomousReviewPage() {
           onClick={() => setConfigOpen(o => !o)}
           style={{ alignSelf: 'flex-start' }}
         >
-          {configOpen ? 'Hide configuration' : 'Show configuration'}
+          {configOpen ? t('rev.hide_config') : t('rev.show_config')}
         </Button>
       )}
 
@@ -663,9 +673,15 @@ export default function AutonomousReviewPage() {
           {/* Courses + Model */}
           <SimpleGrid cols={2} spacing="md">
             <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-blue-5)' }}>
-              <Text size="sm" fw={600} c="blue" mb="xs">Courses to Review</Text>
+              <Group justify="space-between" mb="xs">
+                <Text size="sm" fw={600} c="blue">{t('rev.courses_label')}</Text>
+                <Group gap={4}>
+                  <Button size="xs" variant="subtle" onClick={() => setSelectedSns(filteredCourses.map(c => c.shortname))}>{t('rev.select_all')}</Button>
+                  <Button size="xs" variant="subtle" color="gray" onClick={() => setSelectedSns([])}>{t('rev.select_none')}</Button>
+                </Group>
+              </Group>
               <Select
-                placeholder="All categories"
+                placeholder={t('rev.all_categories')}
                 data={allCategories}
                 value={filterCat}
                 onChange={v => { setFilterCat(v); setSelectedSns([]) }}
@@ -674,7 +690,7 @@ export default function AutonomousReviewPage() {
                 mb="xs"
               />
               <MultiSelect
-                placeholder="Select courses…"
+                placeholder={t('rev.select_courses')}
                 data={courseOptions}
                 value={selectedSns}
                 onChange={setSelectedSns}
@@ -682,22 +698,23 @@ export default function AutonomousReviewPage() {
                 size="sm"
                 maxDropdownHeight={220}
               />
-              <Group gap="xs" mt="xs">
-                <Button size="xs" variant="subtle" onClick={() => setSelectedSns(filteredCourses.map(c => c.shortname))}>All</Button>
-                <Button size="xs" variant="subtle" color="gray" onClick={() => setSelectedSns([])}>None</Button>
-                <Text size="xs" c="dimmed">{selectedSns.length} of {filteredCourses.length} selected{filterCat ? ` in "${filterCat}"` : ''}</Text>
-              </Group>
+              <Text size="xs" c="dimmed" mt="xs">
+                {filterCat
+                  ? t('rev.n_selected_in', { count: selectedSns.length, total: filteredCourses.length, cat: filterCat })
+                  : t('rev.n_selected', { count: selectedSns.length, total: filteredCourses.length })
+                }
+              </Text>
 
               {selectedSns.length > 0 && (
                 <Box mt="sm">
-                  <Text size="xs" fw={500} c="dimmed" mb={6}>Version to review per course</Text>
+                  <Text size="xs" fw={500} c="dimmed" mb={6}>{t('rev.version_label')}</Text>
                   <ScrollArea mah={180} offsetScrollbars>
                     <Stack gap={4}>
                       {selectedSns.map(sn => {
                         const vers = versionMap[sn] ?? []
                         const versionOptions = vers.map((v, i) => ({
                           value: String(v.id),
-                          label: `v${v.version_num}${i === 0 ? ' (latest)' : ''}`,
+                          label: i === 0 ? t('rev.latest', { n: v.version_num }) : `v${v.version_num}`,
                         }))
                         return (
                           <Group key={sn} gap="xs" wrap="nowrap">
@@ -719,7 +736,7 @@ export default function AutonomousReviewPage() {
                               data={versionOptions}
                               value={selectedVersions[sn] != null ? String(selectedVersions[sn]) : null}
                               onChange={v => v && setSelectedVersions(prev => ({ ...prev, [sn]: Number(v) }))}
-                              placeholder={vers.length === 0 ? 'Loading…' : undefined}
+                              placeholder={vers.length === 0 ? t('rev.loading_v') : undefined}
                               disabled={vers.length === 0}
                             />
                           </Group>
@@ -732,17 +749,15 @@ export default function AutonomousReviewPage() {
             </Paper>
 
             <Paper withBorder p="md" radius="md" style={{ borderLeft: '3px solid var(--mantine-color-orange-5)' }}>
-              <Text size="sm" fw={600} c="orange" mb="xs">Model</Text>
+              <Text size="sm" fw={600} c="orange" mb="xs">{t('rev.model_label')}</Text>
               <Autocomplete
-                placeholder="Leave blank for provider default"
+                placeholder={t('rev.model_placeholder')}
                 data={modelOptions}
                 value={modelId}
                 onChange={setModelId}
                 size="sm"
               />
-              <Text size="xs" c="dimmed" mt="xs">
-                Uses the LLM configured in Settings. Low temperature (0.2) for consistent audit output.
-              </Text>
+              <Text size="xs" c="dimmed" mt="xs">{t('rev.model_desc')}</Text>
             </Paper>
           </SimpleGrid>
 
@@ -757,8 +772,8 @@ export default function AutonomousReviewPage() {
             disabled={running || selectedSns.length === 0 || enabledAgents.length === 0}
           >
             {running
-              ? `Reviewing…`
-              : `Begin Autonomous Review  (${selectedSns.length} course${selectedSns.length !== 1 ? 's' : ''} × ${enabledAgents.length} agent${enabledAgents.length !== 1 ? 's' : ''})`
+              ? t('rev.reviewing')
+              : t('rev.begin', { courses: selectedSns.length, cs: selectedSns.length !== 1 ? 's' : '', agents: enabledAgents.length, as: enabledAgents.length !== 1 ? 's' : '' })
             }
           </Button>
 
@@ -774,8 +789,8 @@ export default function AutonomousReviewPage() {
             {!running && <ThemeIcon size="xs" color="green" variant="light" radius="xl"><IconCheck size={10} /></ThemeIcon>}
             <Text size="xs" fw={600} c="violet">
               {running
-                ? `Reviewing — ${reviewSteps.filter(s => s.status === 'done').length} of ${reviewSteps.length} done`
-                : `Review complete — ${reviewSteps.filter(s => s.status === 'done').length} of ${reviewSteps.length} done`
+                ? t('rev.progress_running', { done: reviewSteps.filter(s => s.status === 'done').length, total: reviewSteps.length })
+                : t('rev.progress_done',    { done: reviewSteps.filter(s => s.status === 'done').length, total: reviewSteps.length })
               }
             </Text>
           </Group>
@@ -787,7 +802,7 @@ export default function AutonomousReviewPage() {
       {results.length > 0 && (
         <>
           <Divider
-            label={`${results.length} audit${results.length !== 1 ? 's' : ''} across ${groupedResults.length} course${groupedResults.length !== 1 ? 's' : ''}`}
+            label={t('rev.results_divider', { count: results.length, us: results.length !== 1 ? 's' : '', courses: groupedResults.length, cs: groupedResults.length !== 1 ? 's' : '' })}
             labelPosition="center"
           />
           <Stack gap="lg">
@@ -824,7 +839,7 @@ export default function AutonomousReviewPage() {
                       <Group gap="xs" style={{ flexShrink: 0 }}>
                         {doneVer ? (
                           <Badge color="green" variant="filled" leftSection={<IconWand size={11} />}>
-                            Regenerated → v{doneVer.version_num}
+                            {t('rev.regenerated', { n: doneVer.version_num })}
                           </Badge>
                         ) : (
                           <Button
@@ -836,7 +851,7 @@ export default function AutonomousReviewPage() {
                             loading={isRegenerating}
                             onClick={() => applyFeedback(sn, courseResults)}
                           >
-                            {isRegenerating ? 'Regenerating…' : 'Apply feedback & regenerate'}
+                            {isRegenerating ? t('rev.regenerating') : t('rev.apply_feedback')}
                           </Button>
                         )}
                       </Group>
@@ -876,7 +891,7 @@ export default function AutonomousReviewPage() {
               <ThemeIcon size="sm" color="gray" variant="light">
                 <IconHistory size={14} />
               </ThemeIcon>
-              <Text size="sm" fw={600} c="dimmed">Review History</Text>
+              <Text size="sm" fw={600} c="dimmed">{t('rev.history')}</Text>
               <Badge size="xs" variant="outline" color="gray">{history.length}</Badge>
               {historyOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
             </Group>
@@ -886,19 +901,37 @@ export default function AutonomousReviewPage() {
                 <Table withTableBorder withColumnBorders fz="xs">
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>Course</Table.Th>
-                      <Table.Th>Agent</Table.Th>
-                      <Table.Th>Version</Table.Th>
-                      <Table.Th>Verdict</Table.Th>
-                      <Table.Th>Score</Table.Th>
-                      <Table.Th>Date</Table.Th>
+                      <Table.Th>{t('rev.hist_course')}</Table.Th>
+                      <Table.Th>{t('rev.hist_agent')}</Table.Th>
+                      <Table.Th>{t('rev.hist_version')}</Table.Th>
+                      <Table.Th>{t('rev.hist_verdict')}</Table.Th>
+                      <Table.Th>{t('rev.hist_score')}</Table.Th>
+                      <Table.Th>{t('rev.hist_date')}</Table.Th>
                       <Table.Th w={32} />
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
                     {history.map(r => (
                       <Table.Tr key={r.id}>
-                        <Table.Td fw={600}>{r.shortname}</Table.Td>
+                        <Table.Td fw={600}>
+                          <Group gap={6} wrap="nowrap">
+                            {r.shortname}
+                            {onLoadCourse && (
+                              <Tooltip label={t('rev.open_library')} withArrow>
+                                <ActionIcon size="xs" variant="subtle" color="blue"
+                                            onClick={() => onLoadCourse(r.shortname)}>
+                                  <IconFolderOpen size={12} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                            <Tooltip label={t('rev.set_review')} withArrow>
+                              <ActionIcon size="xs" variant="subtle" color="violet"
+                                          onClick={() => jumpToReview(r.shortname)}>
+                                <IconReload size={12} />
+                              </ActionIcon>
+                            </Tooltip>
+                          </Group>
+                        </Table.Td>
                         <Table.Td>
                           <Badge size="xs" color={r.agent_color || 'gray'} variant="dot">
                             {r.agent_label || r.agent_id || '—'}

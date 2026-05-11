@@ -20,18 +20,21 @@ import { notifications } from '@mantine/notifications'
 import { api, type Course, type CourseVersion, type InstanceStats, type PersistedReview, type MoodleDeploy } from '../api/client'
 import { CourseViewer } from '../components/CourseViewer'
 import { VersionDiff } from '../components/VersionDiff'
+import { useTranslation } from 'react-i18next'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function relativeTime(iso: string): string {
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+function relativeTime(iso: string, t: TFn): string {
   const diff  = Date.now() - new Date(iso).getTime()
   const mins  = Math.floor(diff / 60_000)
   const hours = Math.floor(diff / 3_600_000)
   const days  = Math.floor(diff / 86_400_000)
-  if (mins  < 1)   return 'just now'
-  if (mins  < 60)  return `${mins}m ago`
-  if (hours < 24)  return `${hours}h ago`
-  return `${days}d ago`
+  if (mins  < 1)   return t('common.just_now')
+  if (mins  < 60)  return t('common.ago_mins',  { count: mins })
+  if (hours < 24)  return t('common.ago_hours', { count: hours })
+  return t('common.ago_days', { count: days })
 }
 
 function DeleteConfirm({ onConfirm, onCancel, loading }: {
@@ -67,6 +70,7 @@ function flatChecks(r: PersistedReview): Map<string, CheckStatus> {
 }
 
 function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
+  const { t } = useTranslation()
   const sorted = useMemo(() => [...reviews].sort((a, b) => a.run_at.localeCompare(b.run_at)), [reviews])
 
   // Group chronologically by agent
@@ -86,8 +90,8 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
   if (reviews.length === 0) {
     return (
       <Stack align="center" py="xl" gap="xs">
-        <Text size="sm" c="dimmed">No reviews stored yet for this course.</Text>
-        <Text size="xs" c="dimmed">Run an Autonomous Review — every result is saved automatically.</Text>
+        <Text size="sm" c="dimmed">{t('lib.no_reviews')}</Text>
+        <Text size="xs" c="dimmed">{t('lib.no_reviews_desc')}</Text>
       </Stack>
     )
   }
@@ -97,12 +101,12 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
 
       {/* ── Score Timeline ── */}
       <Box>
-        <Text fw={700} size="sm" mb="sm">Score Timeline</Text>
+        <Text fw={700} size="sm" mb="sm">{t('lib.score_timeline')}</Text>
         <ScrollArea>
           <Table withTableBorder withColumnBorders fz="xs" style={{ minWidth: 420 }}>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th style={{ minWidth: 140 }}>Agent</Table.Th>
+                <Table.Th style={{ minWidth: 140 }}>{t('lib.progress_agent')}</Table.Th>
                 {allDates.map(d => (
                   <Table.Th key={d} ta="center">
                     <Text size="xs">{new Date(d + 'Z').toLocaleDateString()}</Text>
@@ -181,7 +185,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
         return (
           <Box key={key}>
             <Text fw={700} size="sm" mb="sm">
-              {agentReviews[0].agent_label} — Progress: v{first.version_num} → v{last.version_num}
+              {t('lib.progress_label', { agent: agentReviews[0].agent_label, from: first.version_num, to: last.version_num })}
               {' '}
               {first.score != null && last.score != null && (
                 <Text span size="sm" c={last.score >= first.score ? 'green' : 'red'}>
@@ -192,7 +196,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
             <Stack gap="xs">
               {improved.length > 0 && (
                 <Box>
-                  <Text size="xs" fw={600} c="green" mb={4}>Improved ({improved.length})</Text>
+                  <Text size="xs" fw={600} c="green" mb={4}>{t('lib.improved', { count: improved.length })}</Text>
                   <Stack gap={3}>
                     {improved.map(({ label, from, to }) => (
                       <Group key={label} gap="xs" wrap="nowrap">
@@ -208,7 +212,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
               )}
               {regressed.length > 0 && (
                 <Box>
-                  <Text size="xs" fw={600} c="red" mb={4}>Regressed ({regressed.length})</Text>
+                  <Text size="xs" fw={600} c="red" mb={4}>{t('lib.regressed', { count: regressed.length })}</Text>
                   <Stack gap={3}>
                     {regressed.map(({ label, from, to }) => (
                       <Group key={label} gap="xs" wrap="nowrap">
@@ -223,7 +227,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
                 </Box>
               )}
               {improved.length === 0 && regressed.length === 0 && (
-                <Text size="xs" c="dimmed">All {unchanged.length} checks unchanged between these reviews.</Text>
+                <Text size="xs" c="dimmed">{t('lib.unchanged', { count: unchanged.length })}</Text>
               )}
             </Stack>
           </Box>
@@ -232,7 +236,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
 
       {/* ── Full Review History ── */}
       <Box>
-        <Text fw={700} size="sm" mb="sm">Full History ({sorted.length} {sorted.length === 1 ? 'review' : 'reviews'})</Text>
+        <Text fw={700} size="sm" mb="sm">{t('lib.full_history', { count: sorted.length, unit: sorted.length === 1 ? 'review' : 'reviews' })}</Text>
         <Accordion chevronPosition="left" variant="separated">
           {[...sorted].reverse().map(r => {
             const passed  = (r.sections ?? []).flatMap(s => s.items).filter(i => i.status === 'Passed').length
@@ -297,9 +301,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
         </Accordion>
       </Box>
 
-      <Text size="xs" c="dimmed" ta="center" pb="xs">
-        Review tracking active since first stored review · all future reviews saved automatically
-      </Text>
+      <Text size="xs" c="dimmed" ta="center" pb="xs">{t('lib.review_tracking')}</Text>
     </Stack>
   )
 }
@@ -307,6 +309,7 @@ function CourseProgressReport({ reviews }: { reviews: PersistedReview[] }) {
 // ── Course Detail ─────────────────────────────────────────────────────────────
 
 function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => void }) {
+  const { t } = useTranslation()
   const [versions,   setVersions]   = useState<CourseVersion[]>([])
   const [selVid,     setSelVid]     = useState<number | null>(null)
   const [content,    setContent]    = useState<Record<string, any> | null>(null)
@@ -362,12 +365,12 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       setDeployResult(res)
       if (selVid) api.moodle.deploys(selVid).then(setDeploys).catch(() => {})
       notifications.show({
-        title:   'Deployed to Moodle',
-        message: `${deploySn} — ${res.sections_pushed} sections, ${res.forums_seeded} forums seeded`,
+        title:   t('common.deployed'),
+        message: t('lib.notif_deployed_msg', { shortname: deploySn, sections: res.sections_pushed, forums: res.forums_seeded }),
         color:   'green',
       })
     } catch (e: any) {
-      notifications.show({ title: 'Deploy failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_deploy_failed'), message: e.message, color: 'red' })
     } finally {
       setDeploying(false)
     }
@@ -377,9 +380,9 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
     setEvalingCurriculum(true)
     try {
       await api.evaluateCurriculum(course.shortname)
-      notifications.show({ title: 'Curriculum evaluated', message: `${course.shortname} scored across all domains`, color: 'teal' })
+      notifications.show({ title: t('lib.notif_curriculum_done'), message: t('lib.notif_curriculum_msg', { shortname: course.shortname }), color: 'teal' })
     } catch (e: any) {
-      notifications.show({ title: 'Evaluation failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_curriculum_failed'), message: e.message, color: 'red' })
     } finally {
       setEvalingCurriculum(false)
     }
@@ -430,9 +433,9 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
     setBuilding(true)
     try {
       const res = await api.courses.build(course.shortname, selVid)
-      notifications.show({ title: 'Built', message: `${res.filename} — ${res.size_kb} KB`, color: 'green' })
+      notifications.show({ title: t('common.built'), message: t('lib.notif_build_msg', { filename: res.filename, size: res.size_kb }), color: 'green' })
     } catch (e: any) {
-      notifications.show({ title: 'Build failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_build_failed'), message: e.message, color: 'red' })
     } finally {
       setBuilding(false)
     }
@@ -449,7 +452,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       if (vers.length === 0) onDeleted()
       setConfirmDel(null)
     } catch (e: any) {
-      notifications.show({ title: 'Delete failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_delete_failed'), message: e.message, color: 'red' })
     } finally {
       setDeleting(false)
     }
@@ -461,7 +464,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       await api.courses.deleteCourse(course.shortname)
       onDeleted()
     } catch (e: any) {
-      notifications.show({ title: 'Delete failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_delete_failed'), message: e.message, color: 'red' })
       setConfirmCourse(false)
     } finally {
       setDeletingCourse(false)
@@ -489,7 +492,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
             </Group>
           </Box>
           <Group gap={4} style={{ flexShrink: 0 }}>
-            <Tooltip label={`Progress Report (${allReviews.length} reviews)`}>
+            <Tooltip label={t('lib.tt_progress', { count: allReviews.length })}>
               <ActionIcon size="sm" variant="light" color="indigo"
                           onClick={() => setProgressOpen(true)}>
                 <IconChartBar size={14} />
@@ -502,7 +505,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                 loading={deletingCourse}
               />
             ) : (
-              <Tooltip label="Delete course and all versions">
+              <Tooltip label={t('lib.tt_delete_course')}>
                 <ActionIcon size="sm" variant="subtle" color="red"
                             onClick={() => setConfirmCourse(true)}>
                   <IconTrash size={14} />
@@ -537,12 +540,12 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
               </Group>
               {selectedVersion && (
                 <Group gap={4} style={{ flexShrink: 0 }}>
-                  <Tooltip label="Build .mbz">
+                  <Tooltip label={t('lib.tt_build')}>
                     <ActionIcon size="sm" variant="light" loading={building} onClick={handleBuild}>
                       <IconBuildingArch size={14} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Download .mbz">
+                  <Tooltip label={t('lib.tt_download')}>
                     <ActionIcon
                       size="sm" variant="light" color="green"
                       component="a"
@@ -552,7 +555,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <IconDownload size={14} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Print / Export HTML">
+                  <Tooltip label={t('lib.tt_print')}>
                     <ActionIcon
                       size="sm" variant="light" color="teal"
                       component="a"
@@ -562,7 +565,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <IconPrinter size={14} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Export Word (.docx)">
+                  <Tooltip label={t('lib.tt_docx')}>
                     <ActionIcon
                       size="sm" variant="light" color="indigo"
                       component="a"
@@ -573,21 +576,21 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                     </ActionIcon>
                   </Tooltip>
                   {versions.length >= 2 && (
-                    <Tooltip label="Compare versions">
+                    <Tooltip label={t('lib.tt_compare')}>
                       <ActionIcon size="sm" variant="light" color="violet"
                                   onClick={() => setDiffOpen(true)}>
                         <IconGitCompare size={14} />
                       </ActionIcon>
                     </Tooltip>
                   )}
-                  <Tooltip label="Re-evaluate Curriculum (AI)">
+                  <Tooltip label={t('lib.tt_eval_curriculum')}>
                     <ActionIcon size="sm" variant="light" color="teal"
                                 loading={evalingCurriculum}
                                 onClick={handleEvaluateCurriculum}>
                       <IconBrain size={14} />
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip label="Deploy to Moodle">
+                  <Tooltip label={t('lib.tt_deploy')}>
                     <ActionIcon size="sm" variant="light" color="blue"
                                 onClick={() => openDeploy(selectedVersion)}>
                       <IconCloudUpload size={14} />
@@ -600,7 +603,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       loading={deleting}
                     />
                   ) : (
-                    <Tooltip label="Delete this version">
+                    <Tooltip label={t('lib.tt_delete_version')}>
                       <ActionIcon size="sm" variant="subtle" color="red"
                                   onClick={() => setConfirmDel(selectedVersion.id)}>
                         <IconTrash size={14} />
@@ -629,7 +632,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                     <>
                       <Text size="xs" c="dimmed">·</Text>
                       <Badge size="xs" color={color} variant="light">
-                        Last review: {worst.overall ?? 'Error'}{worst.score != null ? ` ${worst.score}/100` : ''} · {relativeTime(worst.run_at)}
+                        {t('lib.last_review', { status: worst.overall ?? 'Error', score: worst.score != null ? `${worst.score}/100` : '', time: relativeTime(worst.run_at, t) })}
                       </Badge>
                     </>
                   )
@@ -642,7 +645,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
                       <Anchor href={latest.moodle_url} target="_blank" size="xs">
                         <Group gap={4} wrap="nowrap">
                           <IconCloudUpload size={11} />
-                          Deployed {relativeTime(latest.deployed_at)}
+                          {t('lib.deployed_time', { time: relativeTime(latest.deployed_at, t as TFn) })}
                           {latest.forums_seeded > 0 && ` · ${latest.forums_seeded} forums`}
                           <IconExternalLink size={11} />
                         </Group>
@@ -659,18 +662,18 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       {/* Content stats */}
       {content && modules.length > 0 && (
         <Group gap="xs">
-          <Badge size="sm" variant="light" color="blue">{modules.length} modules</Badge>
+          <Badge size="sm" variant="light" color="blue">{t('lib.badge_modules', { count: modules.length })}</Badge>
           {quizQ.length > 0 && (
-            <Badge size="sm" variant="light" color="orange">{quizQ.length} quiz questions</Badge>
+            <Badge size="sm" variant="light" color="orange">{t('lib.badge_quiz_q', { count: quizQ.length })}</Badge>
           )}
           {hwCount > 0 && (
-            <Badge size="sm" variant="light" color="grape">{hwCount} homework modules</Badge>
+            <Badge size="sm" variant="light" color="grape">{t('lib.badge_homework', { count: hwCount })}</Badge>
           )}
           {content.moodle_import && (
-            <Badge size="sm" variant="light" color="teal">Moodle import</Badge>
+            <Badge size="sm" variant="light" color="teal">{t('lib.badge_moodle')}</Badge>
           )}
           {content.mbz_import && (
-            <Badge size="sm" variant="light" color="violet">.mbz import</Badge>
+            <Badge size="sm" variant="light" color="violet">{t('lib.badge_mbz')}</Badge>
           )}
         </Group>
       )}
@@ -707,7 +710,7 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
         title={
           <Group gap="xs">
             <IconChartBar size={16} />
-            <Text fw={700} size="sm">Course Progress Report — {course.shortname}</Text>
+            <Text fw={700} size="sm">{t('lib.progress_title', { shortname: course.shortname })}</Text>
             {allReviews.length > 0 && (
               <Badge size="xs" color="indigo" variant="light">{allReviews.length} reviews</Badge>
             )}
@@ -731,46 +734,44 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
       <Modal
         opened={deployOpen}
         onClose={() => setDeployOpen(false)}
-        title={<Text fw={600} size="sm">Deploy to Moodle — {course.fullname}</Text>}
+        title={<Text fw={600} size="sm">{t('lib.deploy_title', { fullname: course.fullname })}</Text>}
         size="md"
       >
         {deployResult ? (
           <Stack gap="sm">
-            <Text size="sm" c="green" fw={500}>
-              Course created successfully!
-            </Text>
+            <Text size="sm" c="green" fw={500}>{t('lib.deploy_success')}</Text>
             <Group gap="xs" wrap="wrap">
-              <Badge size="sm" color="blue" variant="light">{deployResult.sections_pushed} sections</Badge>
+              <Badge size="sm" color="blue" variant="light">{t('lib.deploy_sections', { count: deployResult.sections_pushed })}</Badge>
               {deployResult.forums_seeded > 0 && (
-                <Badge size="sm" color="teal" variant="light">{deployResult.forums_seeded} forums seeded</Badge>
+                <Badge size="sm" color="teal" variant="light">{t('lib.deploy_forums', { count: deployResult.forums_seeded })}</Badge>
               )}
-              <Badge size="sm" color="gray" variant="light">ID #{deployResult.moodle_course_id}</Badge>
+              <Badge size="sm" color="gray" variant="light">{t('lib.deploy_id', { id: deployResult.moodle_course_id })}</Badge>
             </Group>
             <Anchor href={deployResult.url} target="_blank" size="sm">
               <Group gap={4}>
                 <IconExternalLink size={14} />
-                Open in Moodle
+                {t('lib.deploy_open')}
               </Group>
             </Anchor>
             <Group justify="flex-end">
-              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Close</Button>
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>{t('common.close')}</Button>
             </Group>
           </Stack>
         ) : (
           <Stack gap="sm">
             <TextInput
-              label="Shortname"
+              label={t('lib.deploy_shortname')}
               value={deploySn}
               onChange={e => setDeploySn(e.currentTarget.value)}
             />
             <TextInput
-              label="Full name"
+              label={t('lib.deploy_fullname')}
               value={deployFn}
               onChange={e => setDeployFn(e.currentTarget.value)}
             />
             <Select
-              label="Category"
-              placeholder="Select a Moodle category…"
+              label={t('lib.deploy_category')}
+              placeholder={t('lib.deploy_cat_placeholder')}
               data={moodleCategories}
               value={deployCatId}
               onChange={setDeployCatId}
@@ -778,31 +779,28 @@ function CourseDetail({ course, onDeleted }: { course: Course; onDeleted: () => 
             />
             <Group grow>
               <TextInput
-                label="Start date"
+                label={t('lib.deploy_start')}
                 type="date"
                 value={deployStart}
                 onChange={e => setDeployStart(e.currentTarget.value)}
               />
               <TextInput
-                label="End date"
+                label={t('lib.deploy_end')}
                 type="date"
                 value={deployEnd}
                 onChange={e => setDeployEnd(e.currentTarget.value)}
               />
             </Group>
-            <Text size="xs" c="dimmed">
-              Creates a new Moodle course and pushes section names, lecture content, and
-              forum discussion questions. Enrollments and quiz questions are not included.
-            </Text>
+            <Text size="xs" c="dimmed">{t('lib.deploy_note')}</Text>
             <Group justify="flex-end" gap="xs">
-              <Button variant="subtle" onClick={() => setDeployOpen(false)}>Cancel</Button>
+              <Button variant="subtle" onClick={() => setDeployOpen(false)}>{t('common.cancel')}</Button>
               <Button
                 color="blue"
                 leftSection={deploying ? <Loader size="xs" /> : <IconCloudUpload size={14} />}
                 onClick={handleDeploy}
                 disabled={deploying || !deployCatId || !deploySn || !deployFn}
               >
-                {deploying ? 'Deploying…' : 'Deploy'}
+                {deploying ? t('common.deploying') : t('lib.deploy_btn')}
               </Button>
             </Group>
           </Stack>
@@ -924,6 +922,7 @@ function InstanceDashboard({ instanceName, opened, onClose }: {
   opened: boolean
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [stats,   setStats]   = useState<InstanceStats | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -932,7 +931,7 @@ function InstanceDashboard({ instanceName, opened, onClose }: {
     setLoading(true)
     api.courses.stats(instanceName)
       .then(setStats)
-      .catch(e => notifications.show({ title: 'Stats error', message: e.message, color: 'red' }))
+      .catch(e => notifications.show({ title: t('lib.notif_stats_error'), message: e.message, color: 'red' }))
       .finally(() => setLoading(false))
   }
 
@@ -952,8 +951,8 @@ function InstanceDashboard({ instanceName, opened, onClose }: {
           <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
             {isLocal ? <IconHome size={14} /> : <IconCloud size={14} />}
           </ThemeIcon>
-          <Text fw={600} size="sm">{instanceName} — Course Evaluator</Text>
-          <Tooltip label="Refresh stats">
+          <Text fw={600} size="sm">{t('lib.evaluator_title', { name: instanceName })}</Text>
+          <Tooltip label={t('lib.refresh_stats')}>
             <ActionIcon size="xs" variant="subtle" color="gray" loading={loading} onClick={fetchStats}>
               <IconRefresh size={12} />
             </ActionIcon>
@@ -971,59 +970,59 @@ function InstanceDashboard({ instanceName, opened, onClose }: {
           <SimpleGrid cols={2} spacing="sm">
             <StatCard
               icon={<IconBook2 size={16} />}
-              label="Total Courses"
+              label={t('lib.total_courses')}
               value={stats.total_courses}
               color="blue"
             />
             <StatCard
               icon={<IconCategory size={16} />}
-              label="Total Categories"
+              label={t('lib.total_categories')}
               value={stats.total_categories}
               color="teal"
             />
             <StatCard
               icon={<IconGitBranch size={16} />}
-              label="Avg Versions / Course"
+              label={t('lib.avg_versions')}
               value={stats.avg_versions !== null ? stats.avg_versions.toFixed(1) : '—'}
               color="violet"
               sub={stats.avg_versions !== null
-                ? stats.avg_versions >= 2 ? 'actively iterated' : 'mostly first drafts'
-                : 'no versions yet'}
+                ? stats.avg_versions >= 2 ? t('lib.actively_iterated') : t('lib.mostly_drafts')
+                : t('lib.no_versions_yet')}
             />
             <StatCard
               icon={<IconClock size={16} />}
-              label="Last Activity"
-              value={stats.last_activity_at ? relativeTime(stats.last_activity_at) : '—'}
+              label={t('lib.last_activity')}
+              value={stats.last_activity_at ? relativeTime(stats.last_activity_at, t) : '—'}
               color="orange"
               sub={stats.last_activity_at
                 ? new Date(stats.last_activity_at).toLocaleDateString()
-                : 'no versions yet'}
+                : t('lib.no_versions_yet')}
             />
           </SimpleGrid>
 
-          <Divider label="Version Distribution" labelPosition="center" />
+          <Divider label={t('lib.version_dist')} labelPosition="center" />
 
           <SimpleGrid cols={3} spacing="sm">
             <StatCard
               icon={<IconStack size={16} />}
-              label="V1 — Single Version"
+              label={t('lib.v1_single')}
               value={stats.v1_count}
               color="blue"
-              sub="exactly 1 version"
+              sub={t('lib.v1_sub')}
             />
             <StatCard
               icon={<IconStack size={16} />}
-              label="V2 — Two Versions"
+              label={t('lib.v2_two')}
               value={stats.v2_count}
               color="teal"
-              sub="exactly 2 versions"
+              sub={t('lib.v2_sub')}
             />
             <StatCard
               icon={<IconStack size={16} />}
-              label="V3+ — Mature"
+              label={t('lib.v3_mature')}
               value={stats.v3plus_count}
               color="violet"
-              sub="3 or more versions"
+              sub={t('lib.v3_sub')}
             />
           </SimpleGrid>
 
@@ -1036,7 +1035,7 @@ function InstanceDashboard({ instanceName, opened, onClose }: {
                 const v3pct = 100 - v1pct - v2pct
                 return (
                   <Stack gap={6}>
-                    <Text size="xs" fw={500} c="dimmed">Distribution</Text>
+                    <Text size="xs" fw={500} c="dimmed">{t('lib.distribution')}</Text>
                     <Group gap={0} style={{ borderRadius: 4, overflow: 'hidden', height: 12 }}>
                       {v1pct > 0 && <Box style={{ width: `${v1pct}%`, background: 'var(--mantine-color-blue-5)' }} />}
                       {v2pct > 0 && <Box style={{ width: `${v2pct}%`, background: 'var(--mantine-color-teal-5)' }} />}
@@ -1074,6 +1073,7 @@ function InstanceGroup({
   name, categories, selected, checkedShortnames,
   onSelect, onToggle, onToggleSet,
 }: InstanceGroupProps) {
+  const { t } = useTranslation()
   const [open,      setOpen]      = useState(true)
   const [dashOpen,  setDashOpen]  = useState(false)
   const isLocal      = name === 'Local'
@@ -1108,7 +1108,7 @@ function InstanceGroup({
         <ThemeIcon size="sm" variant="light" color={isLocal ? 'gray' : 'blue'}>
           {isLocal ? <IconHome size={12} /> : <IconCloud size={12} />}
         </ThemeIcon>
-        <Tooltip label="View instance stats" position="right" withArrow>
+        <Tooltip label={t('lib.view_stats')} position="right" withArrow>
           <Text
             fw={600} size="sm" c={isLocal ? 'dimmed' : 'blue'}
             style={{ flex: 1, cursor: 'pointer', textDecoration: 'underline dotted' }}
@@ -1157,7 +1157,8 @@ function InstanceGroup({
 
 // ── Library page ──────────────────────────────────────────────────────────────
 
-export default function LibraryPage() {
+export default function LibraryPage({ initialShortname, onJumped }: { initialShortname?: string | null; onJumped?: () => void } = {}) {
+  const { t } = useTranslation()
   const [courses,    setCourses]    = useState<Course[]>([])
   const [loading,    setLoading]    = useState(true)
   const [selected,   setSelected]   = useState<Course | null>(null)
@@ -1183,6 +1184,12 @@ export default function LibraryPage() {
 
   useEffect(load, [])
 
+  useEffect(() => {
+    if (!initialShortname || !courses.length) return
+    const match = courses.find(c => c.shortname === initialShortname)
+    if (match) { setSelected(match); onJumped?.() }
+  }, [initialShortname, courses])
+
   const handleDeleted = () => { setSelected(null); load() }
 
   const toggleOne = (sn: string) =>
@@ -1205,14 +1212,14 @@ export default function LibraryPage() {
       const res = await api.courses.bulkDelete(list)
       setBulkDone(res.deleted.length)
       notifications.show({
-        title: 'Deleted',
-        message: `${res.deleted.length} course${res.deleted.length !== 1 ? 's' : ''} removed`,
+        title: t('common.deleted'),
+        message: t('lib.notif_bulk_removed', { count: res.deleted.length }),
         color: 'orange',
       })
       if (selected && res.deleted.includes(selected.shortname)) setSelected(null)
       load()
     } catch (e: any) {
-      notifications.show({ title: 'Bulk delete failed', message: e.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_bulk_del_failed'), message: e.message, color: 'red' })
     } finally {
       setBulking(false)
     }
@@ -1225,10 +1232,10 @@ export default function LibraryPage() {
     setUploading(true)
     try {
       const version = await api.courses.uploadMbz(file)
-      notifications.show({ title: 'Imported', message: `${version.shortname} v${version.version_num} added to library`, color: 'green' })
+      notifications.show({ title: t('common.imported'), message: t('lib.notif_imported_lib', { shortname: version.shortname, version: version.version_num }), color: 'green' })
       load()
     } catch (err: any) {
-      notifications.show({ title: 'Import failed', message: err.message, color: 'red' })
+      notifications.show({ title: t('lib.notif_import_failed'), message: err.message, color: 'red' })
     } finally {
       setUploading(false)
     }
@@ -1274,7 +1281,7 @@ export default function LibraryPage() {
 
       {/* Header */}
       <Group justify="space-between" style={{ flexShrink: 0 }}>
-        <Title order={3}>Course Library</Title>
+        <Title order={3}>{t('lib.title')}</Title>
         <Group gap="xs">
           <input
             ref={fileInputRef}
@@ -1290,12 +1297,12 @@ export default function LibraryPage() {
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
           >
-            {uploading ? 'Importing…' : 'Upload .mbz'}
+            {uploading ? t('common.importing') : t('lib.upload_mbz')}
           </Button>
           <Button variant="subtle" size="xs"
                   leftSection={loading ? <Loader size="xs" /> : <IconRefresh size={16} />}
                   onClick={load} disabled={loading}>
-            Refresh
+            {t('common.refresh')}
           </Button>
         </Group>
       </Group>
@@ -1306,32 +1313,32 @@ export default function LibraryPage() {
                style={{ background: 'var(--mantine-color-red-0)', flexShrink: 0 }}>
           {bulking ? (
             <Stack gap={4}>
-              <Text size="sm" fw={500}>Deleting {bulkDone} / {checked.size}…</Text>
+              <Text size="sm" fw={500}>{t('lib.deleting_progress', { done: bulkDone, total: checked.size })}</Text>
               <Progress value={(bulkDone / checked.size) * 100} animated size="sm" color="red" />
             </Stack>
           ) : confirmBulk ? (
             <Group justify="space-between">
               <Text size="sm" fw={500} c="red">
-                Delete {checked.size} course{checked.size !== 1 ? 's' : ''} and all their versions?
+                {t('lib.delete_confirm', { count: checked.size })}
               </Text>
               <Group gap="xs">
-                <Button size="xs" color="red" onClick={runBulkDelete}>Yes, delete</Button>
-                <Button size="xs" variant="subtle" onClick={() => setConfirmBulk(false)}>Cancel</Button>
+                <Button size="xs" color="red" onClick={runBulkDelete}>{t('common.yes_delete')}</Button>
+                <Button size="xs" variant="subtle" onClick={() => setConfirmBulk(false)}>{t('common.cancel')}</Button>
               </Group>
             </Group>
           ) : (
             <Group justify="space-between">
-              <Text size="sm" fw={500}>{checked.size} selected</Text>
+              <Text size="sm" fw={500}>{t('lib.n_selected', { count: checked.size })}</Text>
               <Group gap="xs">
                 <Button size="xs" variant="subtle" onClick={() => setChecked(new Set())}>
-                  Clear
+                  {t('common.clear')}
                 </Button>
                 <Button
                   size="xs" color="red"
                   leftSection={<IconTrash size={14} />}
                   onClick={() => setConfirmBulk(true)}
                 >
-                  Delete selected
+                  {t('lib.delete_selected')}
                 </Button>
               </Group>
             </Group>
@@ -1340,16 +1347,15 @@ export default function LibraryPage() {
       )}
 
       {!loading && courses.length === 0 && (
-        <Alert color="blue" title="No courses yet">
-          Use the <strong>New Course</strong> tab to generate your first course,
-          or import from the <strong>Moodle Courses</strong> tab.
+        <Alert color="blue" title={t('lib.no_courses_title')}>
+          {t('lib.no_courses_desc')}
         </Alert>
       )}
 
       {/* Search / filter bar */}
       <Group gap="sm" style={{ flexShrink: 0 }}>
         <TextInput
-          placeholder="Search by name, shortname, professor…"
+          placeholder={t('lib.search_placeholder')}
           leftSection={<IconSearch size={14} />}
           rightSection={search
             ? <ActionIcon size="xs" variant="subtle" color="gray" onClick={() => setSearch('')}><IconX size={12} /></ActionIcon>
@@ -1360,7 +1366,7 @@ export default function LibraryPage() {
           style={{ flex: 1 }}
         />
         <Select
-          placeholder="All categories"
+          placeholder={t('lib.all_categories')}
           data={allCategories}
           value={filterCat}
           onChange={setFilterCat}
@@ -1371,7 +1377,7 @@ export default function LibraryPage() {
         />
         {(search || filterCat) && (
           <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
-            {filteredCourses.length} of {courses.length}
+            {t('lib.filter_count', { filtered: filteredCourses.length, total: courses.length })}
           </Text>
         )}
       </Group>
@@ -1402,7 +1408,7 @@ export default function LibraryPage() {
         <ScrollArea style={{ flex: 1, height: '100%' }}>
           {!selected && !loading && courses.length > 0 && (
             <Text size="sm" c="dimmed" mt="xl" ta="center">
-              Select a course on the left to view its content.
+              {t('lib.select_to_view')}
             </Text>
           )}
           {selected && (

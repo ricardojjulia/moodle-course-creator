@@ -17,6 +17,7 @@ import {
   IconClock, IconCalendarEvent, IconLock, IconLockOpen, IconCopy,
 } from '@tabler/icons-react'
 import { api, type AppSettings, type MoodleInstance, type MoodleStats, type ReviewSchedule, tokenStore } from '../api/client'
+import { useTranslation } from 'react-i18next'
 
 // ── LLM provider presets ──────────────────────────────────────────────────────
 
@@ -58,12 +59,13 @@ function StatCard({ label, value, color = 'blue', icon }: {
 // ── Site overview panel ───────────────────────────────────────────────────────
 
 function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: boolean }) {
+  const { t } = useTranslation()
   if (loading) {
     return (
       <Paper withBorder p="md" radius="md">
         <Group gap="sm">
           <Loader size="sm" />
-          <Text size="sm" fw={500}>Loading site metrics…</Text>
+          <Text size="sm" fw={500}>{t('cfg.loading_metrics')}</Text>
         </Group>
       </Paper>
     )
@@ -91,8 +93,8 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
           </Group>
           <Text size="xs" c="dimmed" mt={2}>
             {stats.release}
-            {stats.current_user_fullname ? ` · connected as ${stats.current_user_fullname}` : ''}
-            {stats.api_functions_count ? ` · ${stats.api_functions_count} API functions` : ''}
+            {stats.current_user_fullname ? ` · ${t('cfg.connected_as', { name: stats.current_user_fullname })}` : ''}
+            {stats.api_functions_count ? ` · ${t('cfg.api_functions_count', { count: stats.api_functions_count })}` : ''}
           </Text>
         </div>
       </Group>
@@ -100,28 +102,28 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
       <Divider mb="sm" />
 
       {/* Row 1 — Course & Category stats */}
-      <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">Courses</Text>
+      <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">{t('cfg.courses_section')}</Text>
       <SimpleGrid cols={4} spacing="xs" mb="md">
         <StatCard
-          label="Total Courses"
+          label={t('cfg.total_courses')}
           value={stats.total_courses}
           color="blue"
           icon={<IconBook size={16} />}
         />
         <StatCard
-          label="Visible"
+          label={t('cfg.visible')}
           value={stats.visible_courses}
           color="green"
           icon={<IconBook size={16} />}
         />
         <StatCard
-          label="Hidden"
+          label={t('cfg.hidden')}
           value={stats.hidden_courses}
           color="orange"
           icon={<IconEyeOff size={16} />}
         />
         <StatCard
-          label="Categories"
+          label={t('cfg.categories')}
           value={stats.total_categories}
           color="teal"
           icon={<IconCategory size={16} />}
@@ -129,28 +131,28 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
       </SimpleGrid>
 
       {/* Row 2 — User stats */}
-      <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">Users</Text>
+      <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">{t('cfg.users_section')}</Text>
       <SimpleGrid cols={4} spacing="xs" mb="md">
         <StatCard
-          label="Total Users"
+          label={t('cfg.total_users')}
           value={stats.total_users}
           color="blue"
           icon={<IconUsers size={16} />}
         />
         <StatCard
-          label="Active (30 days)"
+          label={t('cfg.active_30')}
           value={stats.active_30d}
           color="green"
           icon={<IconUserCheck size={16} />}
         />
         <StatCard
-          label="Suspended"
+          label={t('cfg.suspended')}
           value={stats.suspended_users}
           color="orange"
           icon={<IconUserX size={16} />}
         />
         <StatCard
-          label="Never Logged In"
+          label={t('cfg.never_logged')}
           value={stats.never_logged_in}
           color="red"
           icon={<IconUserOff size={16} />}
@@ -160,25 +162,25 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
       {/* Row 3 — Misc */}
       <SimpleGrid cols={4} spacing="xs" mb="md">
         <StatCard
-          label="Currently Active"
+          label={t('cfg.currently_active')}
           value={stats.active_courses ?? '—'}
           color="violet"
           icon={<IconSchool size={16} />}
         />
         <StatCard
-          label="Mobile Service"
-          value={stats.mobile_service_enabled ? 'Enabled' : 'Disabled'}
+          label={t('cfg.mobile_service')}
+          value={stats.mobile_service_enabled ? t('cfg.enabled') : t('cfg.disabled')}
           color={stats.mobile_service_enabled ? 'teal' : 'gray'}
           icon={<IconDeviceMobile size={16} />}
         />
         <StatCard
-          label="API Functions"
+          label={t('cfg.api_functions')}
           value={stats.api_functions_count}
           color="grape"
           icon={<IconApi size={16} />}
         />
         <StatCard
-          label="Activity Rate"
+          label={t('cfg.activity_rate')}
           value={stats.total_users
             ? `${Math.round(((stats.active_30d ?? 0) / stats.total_users) * 100)}%`
             : '—'}
@@ -191,7 +193,7 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
       {stats.courses_per_category && Object.keys(stats.courses_per_category).length > 0 && (
         <>
           <Divider mb="sm" />
-          <Text size="xs" fw={600} c="dimmed" mb={8} tt="uppercase">Courses per Category</Text>
+          <Text size="xs" fw={600} c="dimmed" mb={8} tt="uppercase">{t('cfg.courses_per_cat')}</Text>
           <Stack gap={6}>
             {Object.entries(stats.courses_per_category).map(([cat, count]) => (
               <div key={cat}>
@@ -215,7 +217,7 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
       {stats.auth_methods && Object.keys(stats.auth_methods).length > 0 && (
         <>
           <Divider mt="sm" mb="sm" />
-          <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">Authentication Methods</Text>
+          <Text size="xs" fw={600} c="dimmed" mb={6} tt="uppercase">{t('cfg.auth_methods')}</Text>
           <Group gap={6} wrap="wrap">
             {Object.entries(stats.auth_methods).map(([method, count]) => (
               <Badge key={method} size="sm" variant="light" color="gray">
@@ -231,7 +233,7 @@ function SiteOverview({ stats, loading }: { stats: MoodleStats | null; loading: 
         <>
           <Divider mt="sm" mb="xs" />
           <Text size="xs" c="dimmed">
-            Some metrics unavailable:{' '}
+            {t('cfg.metrics_unavail')}{' '}
             {[stats.site_error, stats.courses_error, stats.categories_error, stats.users_error]
               .filter(Boolean)
               .join(' · ')}
@@ -256,6 +258,7 @@ const SCHED_AGENTS = [
 ]
 
 function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
+  const { t } = useTranslation()
   const [schedules,   setSchedules]   = useState<ReviewSchedule[]>([])
   const [courses,     setCourses]     = useState<{ value: string; label: string }[]>([])
   const [loading,     setLoading]     = useState(false)
@@ -291,7 +294,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
     try {
       const res = await api.schedules.runOverdue()
       notifications.show({
-        title: `${res.triggered} review${res.triggered !== 1 ? 's' : ''} completed`,
+        title: t('cfg.notif_reviews_done', { count: res.triggered }),
         message: res.errors.length > 0 ? `Errors: ${res.errors.join(', ')}` : 'All scheduled reviews ran successfully.',
         color: res.errors.length > 0 ? 'orange' : 'green',
       })
@@ -317,7 +320,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
         model_id:      newModel,
         frequency:     newFreq,
       })
-      notifications.show({ title: 'Schedule created', message: `${newShort} will be reviewed ${newFreq}`, color: 'green' })
+      notifications.show({ title: t('cfg.notif_sched_created'), message: t('cfg.notif_sched_created_msg', { shortname: newShort, freq: newFreq }), color: 'green' })
       setShowForm(false)
       load()
     } catch (e: any) {
@@ -351,9 +354,9 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
           <ThemeIcon size="sm" color="violet" variant="light">
             <IconCalendarEvent size={12} />
           </ThemeIcon>
-          <Title order={5}>Scheduled Reviews</Title>
+          <Title order={5}>{t('cfg.sched_title')}</Title>
           {overdueCount > 0 && (
-            <Badge size="xs" color="orange">{overdueCount} overdue</Badge>
+            <Badge size="xs" color="orange">{t('cfg.sched_overdue', { count: overdueCount })}</Badge>
           )}
         </Group>
         <Group gap="xs">
@@ -364,7 +367,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
               onClick={runOverdue}
               disabled={running}
             >
-              Run {overdueCount} overdue
+              {t('cfg.sched_run_overdue', { count: overdueCount })}
             </Button>
           )}
           <Button
@@ -372,7 +375,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
             leftSection={<IconPlus size={14} />}
             onClick={() => setShowForm(f => !f)}
           >
-            {showForm ? 'Cancel' : 'Add Schedule'}
+            {showForm ? t('cfg.sched_cancel') : t('cfg.sched_add')}
           </Button>
         </Group>
       </Group>
@@ -383,8 +386,8 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
           <Stack gap="sm">
             <Group grow gap="sm">
               <Select
-                label="Course"
-                placeholder="Select a course"
+                label={t('cfg.sched_course')}
+                placeholder={t('cfg.sched_course_ph')}
                 data={courses}
                 value={newShort}
                 onChange={setNewShort}
@@ -392,7 +395,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
                 size="xs"
               />
               <Select
-                label="Agent"
+                label={t('cfg.sched_agent')}
                 data={SCHED_AGENTS.map(a => ({ value: a.id, label: a.label }))}
                 value={newAgent}
                 onChange={v => setNewAgent(v ?? SCHED_AGENTS[0].id)}
@@ -401,19 +404,19 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
             </Group>
             <Group grow gap="sm">
               <Select
-                label="Frequency"
+                label={t('cfg.sched_freq')}
                 data={[
-                  { value: 'daily',   label: 'Daily' },
-                  { value: 'weekly',  label: 'Weekly' },
-                  { value: 'monthly', label: 'Monthly' },
+                  { value: 'daily',   label: t('cfg.sched_daily') },
+                  { value: 'weekly',  label: t('cfg.sched_weekly') },
+                  { value: 'monthly', label: t('cfg.sched_monthly') },
                 ]}
                 value={newFreq}
                 onChange={v => setNewFreq(v ?? 'weekly')}
                 size="xs"
               />
               <TextInput
-                label="Model ID"
-                placeholder="e.g. local-model or gpt-4o"
+                label={t('cfg.sched_model_id')}
+                placeholder={t('cfg.sched_model_ph')}
                 value={newModel}
                 onChange={e => setNewModel(e.currentTarget.value)}
                 size="xs"
@@ -426,7 +429,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
                 onClick={createSchedule}
                 disabled={!newShort || saving}
               >
-                Save Schedule
+                {t('cfg.sched_save')}
               </Button>
             </Group>
           </Stack>
@@ -437,7 +440,7 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
       {loading && <Loader size="sm" />}
       {!loading && schedules.length === 0 && (
         <Text size="xs" c="dimmed" ta="center" py="md">
-          No schedules yet — add one to auto-review courses periodically.
+          {t('cfg.sched_empty')}
         </Text>
       )}
       {schedules.map(s => {
@@ -453,19 +456,19 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
                     {s.agent_label}
                   </Badge>
                   <Badge size="xs" variant="outline">{s.frequency}</Badge>
-                  {isOverdue && <Badge size="xs" color="orange">overdue</Badge>}
+                  {isOverdue && <Badge size="xs" color="orange">{t('cfg.sched_overdue_badge')}</Badge>}
                 </Group>
                 <Group gap={8}>
                   <Group gap={4}>
                     <IconClock size={11} />
-                    <Text size="xs" c="dimmed">Next: {fmtDate(s.next_run_at)}</Text>
+                    <Text size="xs" c="dimmed">{t('cfg.sched_next')} {fmtDate(s.next_run_at)}</Text>
                   </Group>
                   {s.last_run_at && (
-                    <Text size="xs" c="dimmed">Last: {fmtDate(s.last_run_at)}</Text>
+                    <Text size="xs" c="dimmed">{t('cfg.sched_last')} {fmtDate(s.last_run_at)}</Text>
                   )}
                 </Group>
               </Box>
-              <Tooltip label="Delete schedule" withArrow>
+              <Tooltip label={t('cfg.sched_delete')} withArrow>
                 <ActionIcon
                   size="sm" color="red" variant="subtle"
                   loading={deleting === s.id}
@@ -484,7 +487,82 @@ function ScheduledReviewsSection({ defaultModel }: { defaultModel: string }) {
 
 // ── Settings page ─────────────────────────────────────────────────────────────
 
+// ── Canvas Settings Panel ─────────────────────────────────────────────────────
+
+function CanvasSettingsPanel() {
+  const [canvasUrl,   setCanvasUrl]   = useState('')
+  const [canvasToken, setCanvasToken] = useState('')
+  const [testing,     setTesting]     = useState(false)
+  const [pingResult,  setPingResult]  = useState<{ ok: boolean; msg: string } | null>(null)
+  const [saved,       setSaved]       = useState(false)
+
+  useEffect(() => {
+    api.settings.get().then(s => {
+      setCanvasUrl((s as any).canvas_url || '')
+    }).catch(() => {})
+  }, [])
+
+  const testCanvas = async () => {
+    setTesting(true)
+    setPingResult(null)
+    try {
+      await api.settings.save({ canvas_url: canvasUrl, canvas_token: canvasToken || undefined } as any)
+      const res = await api.canvas.ping()
+      setPingResult({ ok: true, msg: `Connected as ${res.fullname} (${res.username})` })
+      setSaved(true)
+    } catch (e: any) {
+      setPingResult({ ok: false, msg: e.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <Paper withBorder p="md" radius="md">
+      <Group gap="xs" mb="sm">
+        <ThemeIcon size="sm" color="orange" variant="light">
+          <IconCloud size={12} />
+        </ThemeIcon>
+        <Title order={5}>Canvas LMS</Title>
+        {saved && <Badge size="xs" color="green">Configured</Badge>}
+      </Group>
+      <Stack gap="sm">
+        <TextInput
+          label="Canvas URL"
+          placeholder="http://canvas.docker"
+          value={canvasUrl}
+          onChange={e => { setCanvasUrl(e.currentTarget.value); setSaved(false) }}
+        />
+        <PasswordInput
+          label="API Token"
+          description="Generate at: Canvas → Account → Settings → New Access Token"
+          placeholder="Paste your Canvas access token"
+          value={canvasToken}
+          onChange={e => { setCanvasToken(e.currentTarget.value); setSaved(false) }}
+        />
+        <Group>
+          <Button
+            variant="light"
+            color="orange"
+            leftSection={testing ? <Loader size="xs" /> : <IconWifi size={16} />}
+            onClick={testCanvas}
+            disabled={testing || !canvasUrl}
+          >
+            Test & Save
+          </Button>
+        </Group>
+        {pingResult && (
+          <Alert color={pingResult.ok ? 'green' : 'red'} icon={pingResult.ok ? <IconCheck /> : <IconX />}>
+            {pingResult.msg}
+          </Alert>
+        )}
+      </Stack>
+    </Paper>
+  )
+}
+
 export default function SettingsPage() {
+  const { t } = useTranslation()
   const [loading, setLoading]       = useState(true)
   const [testing, setTesting]       = useState(false)
   const [savingInst, setSavingInst] = useState(false)
@@ -575,8 +653,8 @@ export default function SettingsPage() {
         token: form.values.moodle_token,
       })
       notifications.show({
-        title: 'Instance saved',
-        message: `"${pingResult.siteName}" added to your connections`,
+        title: t('cfg.notif_instance_saved'),
+        message: t('cfg.notif_instance_saved_msg', { name: pingResult.siteName }),
         color: 'green',
         icon: <IconCheck />,
       })
@@ -601,7 +679,7 @@ export default function SettingsPage() {
       form.setValues({ moodle_url: s.moodle_url, moodle_token: '', llm_url: form.values.llm_url })
       setInstances(insts)
       setPing(null)
-      notifications.show({ title: 'Activated', message: `Now connected to "${name}"`, color: 'blue' })
+      notifications.show({ title: t('common.activated'), message: t('cfg.notif_activated_msg', { name }), color: 'blue' })
       loadStats()
     } catch (e: any) {
       notifications.show({ title: 'Error', message: e.message, color: 'red' })
@@ -632,7 +710,7 @@ export default function SettingsPage() {
       await api.settings.saveLlm(form.values.llm_url, llmApiKey)
       if (llmApiKey) setLlmKeyMask('••••' + llmApiKey.slice(-4))
       setLlmApiKey('')
-      notifications.show({ title: 'Saved', message: 'LLM settings updated.', color: 'green' })
+      notifications.show({ title: t('common.saved'), message: t('cfg.notif_llm_saved'), color: 'green' })
     } catch (e: any) {
       notifications.show({ title: 'Error', message: e.message, color: 'red' })
     } finally {
@@ -652,14 +730,14 @@ export default function SettingsPage() {
   return (
     <Group align="flex-start" gap="md" wrap="nowrap">
       <Stack w={480} gap="sm" style={{ flexShrink: 0 }}>
-        <Title order={3}>Settings</Title>
+        <Title order={3}>{t('cfg.title')}</Title>
 
         {/* ── Saved Moodle Instances ─────────────────────────────────────── */}
         <Paper withBorder p="md" radius="md">
           <Group justify="space-between" mb="sm">
-            <Title order={5}>Moodle Instances</Title>
+            <Title order={5}>{t('cfg.moodle_instances')}</Title>
             {instances.length === 0 && (
-              <Text size="xs" c="dimmed">No saved connections yet</Text>
+              <Text size="xs" c="dimmed">{t('cfg.no_saved')}</Text>
             )}
           </Group>
 
@@ -682,7 +760,7 @@ export default function SettingsPage() {
                       <div>
                         <Group gap={6}>
                           <Text size="sm" fw={600}>{inst.name}</Text>
-                          {inst.active && <Badge size="xs" color="blue">active</Badge>}
+                          {inst.active && <Badge size="xs" color="blue">{t('cfg.active_badge')}</Badge>}
                         </Group>
                         <Text size="xs" c="dimmed">{inst.url}</Text>
                         <Text size="xs" c="dimmed">{inst.token_masked}</Text>
@@ -690,7 +768,7 @@ export default function SettingsPage() {
                     </Group>
                     <Group gap={4} wrap="nowrap">
                       {inst.active && (
-                        <Tooltip label="Refresh metrics">
+                        <Tooltip label={t('cfg.refresh_metrics')}>
                           <ActionIcon
                             size="sm" variant="light" color="blue"
                             loading={loadingStats}
@@ -701,7 +779,7 @@ export default function SettingsPage() {
                         </Tooltip>
                       )}
                       {!inst.active && (
-                        <Tooltip label="Use this connection">
+                        <Tooltip label={t('cfg.use_connection')}>
                           <ActionIcon
                             size="sm" variant="light" color="blue"
                             loading={activating === inst.name}
@@ -711,7 +789,7 @@ export default function SettingsPage() {
                           </ActionIcon>
                         </Tooltip>
                       )}
-                      <Tooltip label="Remove">
+                      <Tooltip label={t('cfg.remove')}>
                         <ActionIcon
                           size="sm" variant="subtle" color="red"
                           loading={deleting === inst.name}
@@ -731,18 +809,18 @@ export default function SettingsPage() {
         {/* ── Add / Test Connection ──────────────────────────────────────── */}
         <Paper withBorder p="md" radius="md">
           <Title order={5} mb="sm">
-            {instances.length === 0 ? 'Moodle Connection' : 'Add / Update Connection'}
+            {instances.length === 0 ? t('cfg.moodle_connection') : t('cfg.add_update')}
           </Title>
           <Stack gap="sm">
             <TextInput
-              label="Moodle URL"
-              placeholder="https://your-moodle.example.com"
+              label={t('cfg.moodle_url')}
+              placeholder={t('cfg.moodle_url_ph')}
               {...form.getInputProps('moodle_url')}
             />
             <PasswordInput
-              label="Web Service Token"
-              description="Site admin → Plugins → Web services → Manage tokens"
-              placeholder="Leave blank to keep existing token"
+              label={t('cfg.token_label')}
+              description={t('cfg.token_desc')}
+              placeholder={t('cfg.token_ph')}
               {...form.getInputProps('moodle_token')}
             />
             <Group>
@@ -752,7 +830,7 @@ export default function SettingsPage() {
                 onClick={testMoodle}
                 disabled={testing}
               >
-                Test Connection
+                {t('common.test_conn')}
               </Button>
             </Group>
 
@@ -775,7 +853,7 @@ export default function SettingsPage() {
                       leftSection={<IconPlus size={12} />}
                       onClick={saveAsInstance}
                     >
-                      Save connection
+                      {t('cfg.save_connection')}
                     </Button>
                   )}
                 </Group>
@@ -784,11 +862,14 @@ export default function SettingsPage() {
           </Stack>
         </Paper>
 
+        {/* ── Canvas LMS Connection ──────────────────────────────────────── */}
+        <CanvasSettingsPanel />
+
         {/* ── LLM Provider ──────────────────────────────────────────────── */}
         <Paper withBorder p="md" radius="md">
-          <Title order={5} mb="xs">LLM Provider</Title>
+          <Title order={5} mb="xs">{t('cfg.llm_provider')}</Title>
           <Text size="xs" c="dimmed" mb="sm">
-            Select a provider or use your local LLM server.
+            {t('cfg.llm_provider_desc')}
           </Text>
 
           {/* Provider preset buttons */}
@@ -809,29 +890,29 @@ export default function SettingsPage() {
 
           <Stack gap="sm">
             <TextInput
-              label="API Endpoint URL"
-              placeholder="http://192.168.86.41:1234/v1"
+              label={t('cfg.api_endpoint')}
+              placeholder={t('cfg.api_endpoint')}
               {...form.getInputProps('llm_url')}
             />
 
             {llmProvider !== 'local' && (
               <PasswordInput
-                label="API Key"
+                label={t('cfg.api_key')}
                 placeholder={llmKeyMask || 'Enter API key…'}
                 description={
                   llmProvider === 'openrouter'
-                    ? 'Get a free key at openrouter.ai — supports Claude, GPT, Gemini & more'
+                    ? t('cfg.api_key_openrouter')
                     : llmProvider === 'openai'
-                    ? 'platform.openai.com → API keys'
+                    ? t('cfg.api_key_openai')
                     : llmProvider === 'anthropic'
-                    ? 'console.anthropic.com → API keys'
-                    : 'Your provider API key'
+                    ? t('cfg.api_key_anthropic')
+                    : t('cfg.api_key_custom')
                 }
                 value={llmApiKey}
                 onChange={e => setLlmApiKey(e.currentTarget.value)}
                 rightSection={
                   llmKeyMask ? (
-                    <Tooltip label="Key saved">
+                    <Tooltip label={t('cfg.key_saved')}>
                       <ThemeIcon size="xs" color="green" variant="subtle">
                         <IconCheck size={10} />
                       </ThemeIcon>
@@ -844,7 +925,7 @@ export default function SettingsPage() {
             {/* Suggested models for selected provider */}
             {PROVIDER_MODELS[llmProvider] && (
               <Box>
-                <Text size="xs" c="dimmed" mb={4}>Suggested model IDs for this provider:</Text>
+                <Text size="xs" c="dimmed" mb={4}>{t('cfg.suggested_models')}</Text>
                 <Group gap={4} wrap="wrap">
                   {PROVIDER_MODELS[llmProvider].map(m => (
                     <Badge key={m} size="xs" variant="outline" color="gray"
@@ -858,10 +939,7 @@ export default function SettingsPage() {
 
             {llmProvider === 'openrouter' && (
               <Alert color="violet" py="xs" icon={<IconExternalLink size={14} />}>
-                <Text size="xs">
-                  OpenRouter gives one key access to Claude, GPT-4o, Gemini, Llama and 100+ models.
-                  Free tier available.
-                </Text>
+                <Text size="xs">{t('cfg.openrouter_note')}</Text>
               </Alert>
             )}
 
@@ -872,7 +950,7 @@ export default function SettingsPage() {
                 onClick={saveLlm}
                 disabled={savingLlm}
               >
-                Save LLM Settings
+                {t('cfg.save_llm')}
               </Button>
             </Group>
           </Stack>
@@ -897,6 +975,7 @@ export default function SettingsPage() {
 // ── Security Section ──────────────────────────────────────────────────────────
 
 function SecuritySection() {
+  const { t } = useTranslation()
   const [enabled, setEnabled]         = useState(false)
   const [loading, setLoading]         = useState(true)
   const [newToken, setNewToken]       = useState<string | null>(null)
@@ -918,7 +997,7 @@ function SecuritySection() {
       setNewToken(r.token)
       tokenStore.set(r.token)
       setEnabled(true)
-      notifications.show({ color: 'green', message: 'New token generated and saved' })
+      notifications.show({ color: 'green', message: t('cfg.notif_token_generated') })
     } catch (e: unknown) {
       notifications.show({ color: 'red', message: String(e) })
     } finally {
@@ -935,7 +1014,7 @@ function SecuritySection() {
       setEnabled(true)
       setShowCustom(false)
       setCustomToken('')
-      notifications.show({ color: 'green', message: 'Token saved' })
+      notifications.show({ color: 'green', message: t('cfg.notif_token_saved') })
     } catch (e: unknown) {
       notifications.show({ color: 'red', message: String(e) })
     } finally {
@@ -950,7 +1029,7 @@ function SecuritySection() {
       tokenStore.clear()
       setEnabled(false)
       setNewToken(null)
-      notifications.show({ color: 'yellow', message: 'Authentication disabled' })
+      notifications.show({ color: 'yellow', message: t('cfg.notif_auth_disabled') })
     } catch (e: unknown) {
       notifications.show({ color: 'red', message: String(e) })
     } finally {
@@ -964,20 +1043,19 @@ function SecuritySection() {
     <Paper withBorder p="md" radius="md">
       <Group mb="sm" gap="xs">
         {enabled ? <IconLock size={16} color="var(--mantine-color-green-6)" /> : <IconLockOpen size={16} color="var(--mantine-color-gray-5)" />}
-        <Title order={5}>Security</Title>
+        <Title order={5}>{t('cfg.security_title')}</Title>
         <Badge color={enabled ? 'green' : 'gray'} variant="light" size="sm">
-          {enabled ? 'Auth enabled' : 'No auth'}
+          {enabled ? t('cfg.auth_enabled') : t('cfg.no_auth')}
         </Badge>
       </Group>
 
       <Text size="xs" c="dimmed" mb="md">
-        When a token is set, every API request must include it as a Bearer token.
-        The app will prompt for the token on first load. Leave disabled for local-only use.
+        {t('cfg.auth_desc')}
       </Text>
 
       <Stack gap="sm">
         {newToken && (
-          <Alert color="green" icon={<IconCheck size={14} />} title="New token — copy it now">
+          <Alert color="green" icon={<IconCheck size={14} />} title={t('cfg.new_token_title')}>
             <Code block style={{ wordBreak: 'break-all', fontSize: 12 }}>{newToken}</Code>
             <CopyButton value={newToken}>
               {({ copied, copy }) => (
@@ -986,7 +1064,7 @@ function SecuritySection() {
                   color={copied ? 'teal' : 'green'} variant="light"
                   onClick={copy}
                 >
-                  {copied ? 'Copied!' : 'Copy token'}
+                  {copied ? t('cfg.copied') : t('cfg.copy_token')}
                 </Button>
               )}
             </CopyButton>
@@ -998,7 +1076,7 @@ function SecuritySection() {
             size="xs" leftSection={busy ? <Loader size="xs" /> : <IconRefresh size={14} />}
             onClick={generate} loading={busy} variant="filled" color="blue"
           >
-            {enabled ? 'Rotate token' : 'Enable auth (generate token)'}
+            {enabled ? t('cfg.rotate_token') : t('cfg.enable_auth')}
           </Button>
 
           <Button
@@ -1006,7 +1084,7 @@ function SecuritySection() {
             leftSection={<IconApi size={14} />}
             onClick={() => setShowCustom(v => !v)}
           >
-            Set custom token
+            {t('cfg.set_custom')}
           </Button>
 
           {enabled && (
@@ -1015,7 +1093,7 @@ function SecuritySection() {
               leftSection={<IconLockOpen size={14} />}
               onClick={disableAuth} loading={busy}
             >
-              Disable auth
+              {t('cfg.disable_auth')}
             </Button>
           )}
         </Group>
@@ -1024,13 +1102,13 @@ function SecuritySection() {
           <Group align="flex-end">
             <PasswordInput
               style={{ flex: 1 }}
-              label="Custom token"
-              placeholder="Paste your token"
+              label={t('cfg.custom_token')}
+              placeholder={t('cfg.custom_token_ph')}
               value={customToken}
               onChange={e => setCustomToken(e.currentTarget.value)}
             />
             <Button size="sm" onClick={saveCustom} loading={busy} disabled={!customToken.trim()}>
-              Save
+              {t('common.save')}
             </Button>
           </Group>
         )}
